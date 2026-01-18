@@ -1,0 +1,332 @@
+# Grow Automation Project - Cursor Rules
+
+## Project Overview
+
+This is an **Indoor Grow Environment Automation** project using Home Assistant on a Raspberry Pi, accessed via Tailscale at `http://100.65.202.84:8123`.
+
+The goal is to maintain optimal VPD (Vapor Pressure Deficit) for plant growth through automated climate control, with a custom JavaScript dashboard for monitoring and control.
+
+**Current Stage:** Seedling  
+**Location:** Basement (Albany, NY area)  
+**Key Challenge:** 30% baseline humidity requires active humidification
+
+---
+
+## 🔴 CRITICAL: MCP Verification Rule
+
+**BEFORE suggesting ANY climate adjustments, the AI MUST:**
+
+1. Use `get_entity` to fetch current sensor values:
+   ```
+   get_entity sensor.ac_infinity_controller_69_pro_temperature
+   get_entity sensor.ac_infinity_controller_69_pro_humidity
+   get_entity sensor.ac_infinity_controller_69_pro_vpd
+   ```
+
+2. Compare live values against targets in `docs/MANIFEST.md`
+
+3. Only then recommend adjustments based on **actual current state**
+
+**Never assume sensor values from documentation - always verify live data.**
+
+---
+
+## MCP Connection
+
+This project has an active MCP connection to Home Assistant (`hass-mcp`). 
+
+### MCP Tool Usage Requirements
+
+| Situation | Required Action |
+|-----------|-----------------|
+| Before climate recommendations | **MUST** use `get_entity` for temp/humidity/VPD |
+| Before writing automations | Use `list_entities` to verify entity IDs |
+| After creating automation | Use `list_automations` to confirm deployment |
+| Debugging issues | Use `troubleshoot_entity` or `get_error_log` |
+| Checking device status | Use `get_entity` for specific device |
+
+### Key Entity IDs (Verified)
+
+```yaml
+# Climate Sensors
+sensor.ac_infinity_controller_69_pro_temperature
+sensor.ac_infinity_controller_69_pro_humidity
+sensor.ac_infinity_controller_69_pro_vpd
+
+# Controllable Devices
+switch.light                    # Grow Light (Third Reality Zigbee)
+climate.tent_heater             # Heater thermostat
+select.exhaust_fan_active_mode  # Fan mode selector
+
+# Pending Integration
+humidifier.cloudforge_t7        # CloudForge T7 (not yet in HA)
+```
+
+---
+
+## File Structure
+
+```
+Grow/
+├── .cursor/mcp.json          # MCP config (DO NOT MODIFY)
+├── .cursorrules              # This file
+├── docs/                     # 📚 SINGLE SOURCE OF TRUTH
+│   ├── MANIFEST.md           # Master entity registry & protocols
+│   ├── AUTOMATIONS.md        # Automation documentation
+│   ├── ENTITIES.md           # Detailed entity docs
+│   ├── SCHEDULES.md          # Time-based schedules
+│   ├── VPD_TARGETS.md        # Growth stage targets
+│   └── CHANGELOG.md          # Change log
+├── config/                   # Home Assistant configs
+│   └── automations/          # YAML automation files
+├── dashboard/                # React dashboard app
+└── scripts/                  # Utility scripts
+```
+
+---
+
+## Documentation Requirements
+
+**CRITICAL: Always update documentation when making changes.**
+
+1. **Before creating/modifying automations:**
+   - Read `docs/MANIFEST.md` for current state
+   - Read `docs/AUTOMATIONS.md` for existing logic
+   - **Use MCP `get_entity` to verify current values**
+
+2. **After creating/modifying automations:**
+   - Update `docs/AUTOMATIONS.md` with the new automation
+   - Update `docs/MANIFEST.md` if adding new entities
+   - Add entry to `docs/CHANGELOG.md`
+
+3. **When adding new hardware:**
+   - Document in `docs/MANIFEST.md` first
+   - Use MCP `list_entities` to find new entity IDs
+   - Create automation documentation before YAML
+
+---
+
+## Environment Baseline Data
+
+### Water Chemistry
+```yaml
+albany_tap_water:
+  baseline_ph: 7.77
+  target_ph: 6.4 - 6.5
+  treatment: pH Down solution
+  rule: "Always pH adjust AFTER adding nutrients"
+```
+
+### Ambient Conditions
+```yaml
+basement:
+  baseline_humidity: 30%  # CRITICAL CHALLENGE
+  mitigation: CloudForge T7 humidifier (9L tank)
+  notes: "Must run continuously during seedling stage"
+```
+
+---
+
+## Active Schedules
+
+### Light Schedule (20/4)
+```yaml
+entity: switch.light
+on_time: "06:00:00"   # 6 AM
+off_time: "02:00:00"  # 2 AM
+photoperiod: 20 hours
+dark_period: 4 hours
+```
+
+### Temperature Modulation
+```yaml
+entity: climate.tent_heater
+day:
+  time: "06:00:00"
+  target: 80°F
+night:
+  time: "02:00:00"  
+  target: 70°F
+```
+
+---
+
+## VPD Targets (Current: Seedling)
+
+| Stage | VPD (kPa) | Temp (°F) | Humidity (%) |
+|-------|-----------|-----------|--------------|
+| **Seedling** | 0.4 - 0.8 | 75-78 | 65-75 |
+| Vegetative | 0.8 - 1.2 | 78-82 | 55-65 |
+| Flowering | 1.0 - 1.5 | 75-82 | 45-55 |
+
+**Current Problem:** VPD ~2.6 kPa (too high due to 30% humidity)
+
+---
+
+## Safe-Touch Planting Protocol
+
+Reference for seedling care procedures:
+
+```yaml
+seed_depth: 0.5 inches
+watering_circle: 3 inches diameter
+initial_water: 1 cup @ pH 6.4-6.5
+humidity_dome: Inverted Solo Cup with 4 ceiling slits
+dome_removal: When first true leaves appear
+```
+
+See `docs/MANIFEST.md` Section 6 for full protocol.
+
+---
+
+## Home Assistant YAML Standards
+
+### Automation Format
+```yaml
+alias: "Descriptive Name"
+description: "What this automation does and why"
+mode: single
+
+trigger:
+  - platform: time
+    at: "06:00:00"
+
+condition: []
+
+action:
+  - service: switch.turn_on
+    target:
+      entity_id: switch.light
+```
+
+### Naming Conventions
+- Automations: `snake_case_descriptive_name`
+- Friendly names: Title Case with context
+- Scripts: `verb_noun_context`
+
+---
+
+## Dashboard Development
+
+### Technology Stack
+- React 18+ with Vite
+- Tailwind CSS for styling
+- Recharts for data visualization
+- Home Assistant WebSocket API
+
+### HA API Connection
+```javascript
+// WebSocket URL (via Tailscale)
+const WS_URL = 'ws://100.65.202.84:8123/api/websocket';
+
+// REST API Base
+const API_BASE = 'http://100.65.202.84:8123/api';
+```
+
+---
+
+## Common Tasks
+
+### Adding a New Automation
+
+1. **Verify entities exist:**
+   ```
+   MCP: get_entity [entity_id]
+   ```
+
+2. **Check current state:**
+   ```
+   MCP: get_entity sensor.ac_infinity_controller_69_pro_vpd
+   ```
+
+3. **Document in `docs/AUTOMATIONS.md`**
+
+4. **Create YAML** in `config/automations/`
+
+5. **Deploy via MCP:**
+   ```
+   MCP: create_automation [yaml_content]
+   ```
+
+6. **Verify deployment:**
+   ```
+   MCP: list_automations
+   ```
+
+7. **Log in `docs/CHANGELOG.md`**
+
+### Recommending Climate Changes
+
+⚠️ **MANDATORY WORKFLOW:**
+
+1. Fetch live data:
+   ```
+   MCP: get_entity sensor.ac_infinity_controller_69_pro_temperature
+   MCP: get_entity sensor.ac_infinity_controller_69_pro_humidity
+   MCP: get_entity sensor.ac_infinity_controller_69_pro_vpd
+   ```
+
+2. Compare to targets in MANIFEST.md
+
+3. Calculate required adjustment
+
+4. Recommend specific action with rationale
+
+**NEVER skip step 1. Documentation values may be stale.**
+
+---
+
+## Troubleshooting
+
+### Entity Unavailable
+```
+MCP: troubleshoot_entity [entity_id]
+```
+
+### Automation Not Firing
+```
+MCP: debug_automation [automation_entity_id]
+```
+
+### Check HA Logs
+```
+MCP: get_error_log
+```
+
+---
+
+## Critical Thresholds (Seedling Stage)
+
+| Metric | Alert Low | Target | Alert High |
+|--------|-----------|--------|------------|
+| Temperature | 70°F | 75-78°F | 82°F |
+| Humidity | 60% | 65-75% | 85% |
+| VPD | 0.3 kPa | 0.4-0.8 kPa | 1.0 kPa |
+
+---
+
+## Quick Reference
+
+### MCP Verification Command Block
+```
+# ALWAYS run before climate recommendations:
+get_entity sensor.ac_infinity_controller_69_pro_temperature
+get_entity sensor.ac_infinity_controller_69_pro_humidity  
+get_entity sensor.ac_infinity_controller_69_pro_vpd
+get_entity switch.light
+get_entity climate.tent_heater
+```
+
+### Key Entities
+| Device | Entity ID |
+|--------|-----------|
+| Grow Light | `switch.light` |
+| Heater | `climate.tent_heater` |
+| Temperature | `sensor.ac_infinity_controller_69_pro_temperature` |
+| Humidity | `sensor.ac_infinity_controller_69_pro_humidity` |
+| VPD | `sensor.ac_infinity_controller_69_pro_vpd` |
+| Exhaust Fan | `select.exhaust_fan_active_mode` |
+
+---
+
+*This file provides context for AI-assisted development. Keep it updated as the project evolves.*
