@@ -1,0 +1,55 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-void text-gray-100 font-sans antialiased;
+  }
+  
+  /* Custom scrollbar for that sleek look */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-abyss;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-deep rounded-full;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-600;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-abyss rounded-xl border border-zinc-800 p-4 shadow-lg;
+  }
+  
+  .card-glow-optimal {
+    @apply border-optimal/30 shadow-glow-green;
+  }
+  
+  .card-glow-caution {
+    @apply border-caution/30 shadow-glow-amber;
+  }
+  
+  .card-glow-critical {
+    @apply border-critical/30 shadow-glow-red;
+  }
+  
+  .sensor-value {
+    @apply font-mono text-4xl font-semibold tracking-tight;
+  }
+  
+  .sensor-label {
+    @apply text-sm text-zinc-400 uppercase tracking-wider;
+  }
+}
