@@ -5,3 +5,6 @@ export { ScheduleSlider } from './ScheduleSlider';
 export { StatusBadge } from './StatusBadge';
 export { CameraFeed } from './CameraFeed';
 export { ErrorBoundary } from './ErrorBoundary';
+export { SystemThinkingPanel } from './SystemThinkingPanel';
+export { ManualControlPanel } from './ManualControlPanel';
+export { AIAnalysisPanel } from './AIAnalysisPanel';

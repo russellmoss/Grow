@@ -52,6 +52,11 @@ export const ENTITIES = {
   HEATER: 'climate.tent_heater',
   EXHAUST_FAN_MODE: 'select.exhaust_fan_active_mode',
   HUMIDIFIER_MODE: 'select.cloudforge_t5_active_mode',  // CloudForge T5
+  HUMIDIFIER_ON_POWER: 'number.cloudforge_t5_on_power',  // CloudForge T5 intensity control (1-10)
+  
+  // Exhaust Fan Power Control (for dynamic VPD management)
+  EXHAUST_FAN_ON_POWER: 'number.exhaust_fan_on_power',
+  EXHAUST_FAN_CURRENT_POWER: 'sensor.exhaust_fan_current_power',
   
   // Power Monitoring
   LIGHT_POWER: 'sensor.light_power',

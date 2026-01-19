@@ -81,12 +81,23 @@ export async function getEntityHistory(entityId, startTime, endTime = new Date()
     const data = await response.json();
     return data[0] || []; // Returns array of state changes
   } catch (err) {
-    console.warn('[HA-API] REST API failed, trying WebSocket fallback:', err);
+    // Log the error but don't spam console - this is expected if history API is unavailable
+    if (err.message && err.message.includes('Internal Server Error')) {
+      console.warn(`[HA-API] History API unavailable for ${entityId}, trying WebSocket fallback...`);
+    } else {
+      console.warn('[HA-API] REST API failed, trying WebSocket fallback:', err.message || err);
+    }
+    
     // Fallback to WebSocket if REST fails
     try {
-      return await haWebSocket.getEntityHistory(entityId, startTime, endTime);
+      const wsHistory = await haWebSocket.getEntityHistory(entityId, startTime, endTime);
+      if (wsHistory && wsHistory.length > 0) {
+        console.log(`[HA-API] WebSocket fallback successful for ${entityId}: ${wsHistory.length} points`);
+      }
+      return wsHistory || [];
     } catch (wsErr) {
-      console.error('[HA-API] Both REST and WebSocket failed:', wsErr);
+      // Both methods failed - this is OK, charts will just show no data
+      console.warn(`[HA-API] History unavailable for ${entityId} (both REST and WebSocket failed). Charts will show empty.`);
       return []; // Return empty array to allow graceful degradation
     }
   }

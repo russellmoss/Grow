@@ -162,16 +162,79 @@ class HAWebSocket {
     } catch (err) {
       // Format error messages from Home Assistant
       // HA errors often come as objects with 'msg' and 'code' properties
+      // AC Infinity errors come as Error objects with stringified message (Python dict format)
       if (err && typeof err === 'object') {
+        // If it's an Error object, try to extract the original error data
+        if (err instanceof Error) {
+          const messageStr = err.message || '';
+          
+          // Try to parse Python dict format: {'msg': '...', 'code': 100001}
+          // Convert single quotes to double quotes and try JSON.parse
+          if (messageStr.trim().startsWith('{') || messageStr.trim().startsWith("'")) {
+            try {
+              // Replace Python dict syntax with JSON syntax
+              let jsonStr = messageStr
+                .replace(/'/g, '"')  // Single quotes to double quotes
+                .replace(/None/g, 'null')  // Python None to JSON null
+                .replace(/True/g, 'true')  // Python True to JSON true
+                .replace(/False/g, 'false'); // Python False to JSON false
+              
+              const parsed = JSON.parse(jsonStr);
+              if (parsed.msg || parsed.code !== undefined) {
+                const errorMsg = new Error(parsed.msg || messageStr);
+                errorMsg.code = parsed.code;
+                errorMsg.originalError = parsed;
+                throw errorMsg;
+              }
+            } catch (parseErr) {
+              // If parsing fails, try regular JSON.parse
+              try {
+                const parsed = JSON.parse(messageStr);
+                if (parsed.msg) {
+                  const errorMsg = new Error(parsed.msg);
+                  errorMsg.code = parsed.code;
+                  errorMsg.originalError = parsed;
+                  throw errorMsg;
+                }
+              } catch (parseErr2) {
+                // If both fail, try to extract code from string using regex
+                const codeMatch = messageStr.match(/['"]code['"]\s*:\s*(\d+)/);
+                const msgMatch = messageStr.match(/['"]msg['"]\s*:\s*['"]([^'"]+)['"]/);
+                if (codeMatch || msgMatch) {
+                  const errorMsg = new Error(msgMatch ? msgMatch[1] : messageStr);
+                  errorMsg.code = codeMatch ? parseInt(codeMatch[1], 10) : undefined;
+                  errorMsg.originalError = { msg: msgMatch ? msgMatch[1] : messageStr, code: errorMsg.code };
+                  throw errorMsg;
+                }
+              }
+            }
+          }
+          
+          // Check if error has originalError property
+          if (err.originalError) {
+            const orig = err.originalError;
+            if (orig.msg) {
+              const errorMsg = new Error(orig.msg);
+              errorMsg.code = orig.code;
+              errorMsg.originalError = orig;
+              throw errorMsg;
+            }
+          }
+          
+          // Check if error already has code property
+          if (err.code !== undefined) {
+            throw err;
+          }
+          
+          // Preserve the Error object as-is
+          throw err;
+        }
+        // If it's a plain object with msg property
         if (err.msg) {
           const errorMsg = new Error(err.msg);
           errorMsg.code = err.code;
           errorMsg.originalError = err;
           throw errorMsg;
-        }
-        // If it's an Error object, preserve it
-        if (err instanceof Error) {
-          throw err;
         }
         // Otherwise, convert to Error
         throw new Error(err.message || JSON.stringify(err));

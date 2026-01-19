@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-void text-gray-100 font-sans antialiased;
+  }
+  
+  /* Custom scrollbar for that sleek look */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-abyss;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-deep rounded-full;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-600;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-abyss rounded-xl border border-zinc-800 p-4 shadow-lg transition-all duration-300;
+  }
+  
+  .card-glow-optimal {
+    @apply border-optimal/40 shadow-glow-green;
+  }
+  
+  .card-glow-caution {
+    @apply border-caution/40 shadow-glow-amber;
+  }
+  
+  .card-glow-critical {
+    @apply border-critical/40 shadow-glow-red;
+  }
+  
+  .sensor-value {
+    @apply font-mono text-4xl font-semibold tracking-tight;
+  }
+  
+  .sensor-label {
+    @apply text-sm text-zinc-400 uppercase tracking-wider;
+  }
+  
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200;
+  }
+  
+  .btn-primary {
+    @apply bg-neon-green/20 text-neon-green border border-neon-green/30 hover:bg-neon-green/30;
+  }
+  
+  .btn-secondary {
+    @apply bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700;
+  }
+  
+  .btn-danger {
+    @apply bg-critical/20 text-critical border border-critical/30 hover:bg-critical/30;
+  }
+}

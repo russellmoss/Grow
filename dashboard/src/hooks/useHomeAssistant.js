@@ -84,15 +84,82 @@ export function useHomeAssistant() {
       const result = await haWebSocket.callService(domain, service, data);
       return { success: true, data: result };
     } catch (err) {
-      // Log the error but don't set connection error state
-      // Service call failures are separate from connection issues
-      console.error('[useHomeAssistant] Service call error:', {
-        domain,
-        service,
-        data,
-        error: err.message || err,
-        errorObject: err,
-      });
+      // Extract error message from various formats
+      let errorMessage = 'Service call failed';
+      let errorCode = null;
+      
+      if (err && typeof err === 'object') {
+        // Check for Error object with code property
+        if (err instanceof Error) {
+          errorMessage = err.message || 'Service call failed';
+          errorCode = err.code; // Get code directly from Error object
+          
+          // Try to extract from originalError if present
+          if (err.originalError) {
+            const orig = err.originalError;
+            if (orig.msg) {
+              errorMessage = orig.msg;
+              errorCode = orig.code !== undefined ? orig.code : errorCode;
+            }
+          }
+          
+          // If code is still not set, try to extract from message string
+          if (errorCode === undefined || errorCode === null) {
+            // Try Python dict format: {'msg': '...', 'code': 100001}
+            const codeMatch = errorMessage.match(/['"]code['"]\s*:\s*(\d+)/);
+            if (codeMatch) {
+              errorCode = parseInt(codeMatch[1], 10);
+            }
+          }
+          
+          // Try to parse JSON from message if it looks like JSON
+          if (errorMessage.trim().startsWith('{') || errorMessage.trim().startsWith('[')) {
+            try {
+              // Try Python dict format first (single quotes)
+              let jsonStr = errorMessage
+                .replace(/'/g, '"')
+                .replace(/None/g, 'null')
+                .replace(/True/g, 'true')
+                .replace(/False/g, 'false');
+              const parsed = JSON.parse(jsonStr);
+              if (parsed.msg) {
+                errorMessage = parsed.msg;
+                errorCode = parsed.code !== undefined ? parsed.code : errorCode;
+              }
+            } catch (parseErr) {
+              // Try regular JSON
+              try {
+                const parsed = JSON.parse(errorMessage);
+                if (parsed.msg) {
+                  errorMessage = parsed.msg;
+                  errorCode = parsed.code !== undefined ? parsed.code : errorCode;
+                }
+              } catch (parseErr2) {
+                // Keep original message if parsing fails
+              }
+            }
+          }
+        } else if (err.msg) {
+          errorMessage = err.msg;
+          errorCode = err.code;
+        } else if (err.message) {
+          errorMessage = err.message;
+          errorCode = err.code;
+        } else {
+          errorMessage = JSON.stringify(err);
+        }
+      } else if (err) {
+        errorMessage = String(err);
+      }
+      
+      // Log the error with full details (log as separate lines for better visibility)
+      console.error('[useHomeAssistant] Service call error:');
+      console.error('  Domain:', domain);
+      console.error('  Service:', service);
+      console.error('  Data:', JSON.stringify(data, null, 2));
+      console.error('  Error Message:', errorMessage);
+      console.error('  Error Code:', errorCode || err?.code);
+      console.error('  Error Object:', err);
       
       // Only set connection error if it's actually a connection issue
       if (err.message && err.message.includes('Not connected')) {
@@ -102,7 +169,8 @@ export function useHomeAssistant() {
       // Return error result instead of throwing to allow components to handle gracefully
       return { 
         success: false, 
-        error: err.message || 'Service call failed',
+        error: errorMessage,
+        errorCode: errorCode || err?.code,
         errorObject: err 
       };
     }
@@ -183,6 +251,7 @@ export function useHomeAssistant() {
     fanPower: getEntityValue('sensor.exhaust_fan_current_power'), // Power level 1-10
     humidifierMode: entities[ENTITIES.HUMIDIFIER_MODE]?.state,
     humidifierState: entities[ENTITIES.HUMIDIFIER_STATE]?.state, // 'on' | 'off'
+    humidifierPower: getEntityValue(ENTITIES.HUMIDIFIER_ON_POWER), // Intensity level 1-10
 
     // Actions
     callService,

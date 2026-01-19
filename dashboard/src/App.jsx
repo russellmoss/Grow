@@ -2,7 +2,8 @@ import { HomeAssistantProvider, useHA } from './context/HomeAssistantContext';
 import { GrowLogProvider } from './context/GrowLogContext';
 import { PhenologyProvider, usePhenology } from './context/PhenologyContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { KPICard, ToggleSwitch, FanModeSelector, ScheduleSlider } from './components';
+import { KPICard, ToggleSwitch, FanModeSelector, ScheduleSlider, SystemThinkingPanel, ManualControlPanel, AIAnalysisPanel } from './components';
+import { useEnvironmentController } from './hooks/useEnvironmentController';
 import { VPDHistoryChart } from './components/charts/VPDHistoryChart';
 import { ClimateHistoryChart } from './components/charts/ClimateHistoryChart';
 import { GrowLog } from './components/log/GrowLog';
@@ -10,7 +11,7 @@ import { LogHistory } from './components/log/LogHistory';
 import { CameraFeed } from './components/CameraFeed';
 import StageSelector from './components/StageSelector';
 import { Thermometer, Droplets, Wind } from 'lucide-react';
-import { VPD_TARGETS, TEMP_TARGETS, HUMIDITY_TARGETS } from './types/entities';
+// Removed hardcoded targets - now using currentStage values from phenology
 
 function Dashboard() {
   const { 
@@ -27,10 +28,38 @@ function Dashboard() {
     humidifierState,
     toggleSwitch,
     setFanMode,
+    callService,
   } = useHA();
 
   // Get phenology context
   const { currentStage } = usePhenology();
+
+  // Environment Controller hook
+  const {
+    actionLog,
+    isThinking,
+    isEnabled,
+    setEnabled,
+    triggerNow,
+    latestAction,
+  } = useEnvironmentController({
+    intervalMinutes: 5,
+    enabled: true, // Start enabled by default
+  });
+
+  // Determine if it's day or night based on light state
+  const isDayTime = lightState === 'on';
+  
+  // Get temperature targets from current stage (day or night)
+  const tempTargets = currentStage?.temperature 
+    ? (isDayTime ? currentStage.temperature.day : currentStage.temperature.night)
+    : { min: 70, max: 80, target: 75 }; // Fallback defaults
+  
+  // Get humidity targets from current stage
+  const humidityTargets = currentStage?.humidity || { min: 60, max: 70, optimal: 65 };
+  
+  // Get VPD targets from current stage
+  const vpdTargets = currentStage?.vpd || { min: 0.4, max: 0.8, optimal: 0.6 };
 
   if (isLoading) {
     return (
@@ -100,12 +129,12 @@ function Dashboard() {
         {/* KPI Cards - Climate Sensors */}
         <div className="lg:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-4">
           <KPICard
-            label="Temperature"
+            label={`Temperature (${isDayTime ? 'Day' : 'Night'})`}
             value={temperature}
             unit="°F"
-            min={TEMP_TARGETS.day.min}
-            max={TEMP_TARGETS.day.max}
-            optimal={TEMP_TARGETS.day.target}
+            min={tempTargets.min}
+            max={tempTargets.max}
+            optimal={tempTargets.target}
             icon={Thermometer}
             precision={1}
             statusIndicator={
@@ -118,9 +147,9 @@ function Dashboard() {
             label="Humidity"
             value={humidity}
             unit="%"
-            min={HUMIDITY_TARGETS.seedling.min}
-            max={HUMIDITY_TARGETS.seedling.max}
-            optimal={HUMIDITY_TARGETS.seedling.optimal}
+            min={humidityTargets.min}
+            max={humidityTargets.max}
+            optimal={humidityTargets.optimal}
             icon={Droplets}
             precision={1}
             statusIndicator={
@@ -133,11 +162,46 @@ function Dashboard() {
             label="VPD"
             value={vpd}
             unit=" kPa"
-            min={VPD_TARGETS.seedling.min}
-            max={VPD_TARGETS.seedling.max}
-            optimal={VPD_TARGETS.seedling.optimal}
+            min={vpdTargets.min}
+            max={vpdTargets.max}
+            optimal={vpdTargets.optimal}
             icon={Wind}
             precision={2}
+          />
+        </div>
+
+        {/* Environment Controller Section */}
+        <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <ManualControlPanel
+            isEnabled={isEnabled}
+            isThinking={isThinking}
+            onToggleEnabled={() => setEnabled(!isEnabled)}
+            onTriggerNow={triggerNow}
+          />
+          
+          <SystemThinkingPanel
+            actionLog={actionLog}
+            isThinking={isThinking}
+            isEnabled={isEnabled}
+          />
+        </div>
+
+        {/* AI Analysis Panel */}
+        <div className="lg:col-span-3 mb-8">
+          <AIAnalysisPanel
+            sensorData={{ temp: temperature, humidity, vpd }}
+            stageTargets={currentStage}
+            actuatorStates={{
+              light: lightState,
+              heater: 'heat',
+              heaterAction: heaterAction,
+              humidifier: humidifierState,
+              fanMode: fanMode,
+              fanPower: fanPower,
+            }}
+            controllerState={{ latestAction, actionLog }}
+            actionHistory={actionLog.slice(0, 10)}
+            callService={callService}
           />
         </div>
 
