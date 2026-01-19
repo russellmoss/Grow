@@ -40,6 +40,89 @@ function calculateSeverity(current, target) {
 }
 
 /**
+ * Calculate optimal exhaust fan power based on environmental conditions
+ * 
+ * @param {Object} params
+ * @param {number} params.currentVPD - Current VPD (kPa)
+ * @param {number} params.targetVPD - Target VPD (kPa)
+ * @param {number} params.currentHumidity - Current humidity (%)
+ * @param {number} params.targetHumidity - Target humidity (%)
+ * @param {number} params.currentTemp - Current temperature (°F)
+ * @param {number} params.targetTemp - Target temperature (°F)
+ * @param {number} params.currentFanPower - Current fan power (0-10)
+ * @returns {number} Optimal fan power (1-10, minimum 1 for air exchange)
+ */
+function calculateOptimalFanPower({ currentVPD, targetVPD, currentHumidity, targetHumidity, currentTemp, targetTemp, currentFanPower }) {
+  const MIN_FAN_POWER = 1; // Minimum for air exchange (prevent stagnant air)
+  const MAX_FAN_POWER = 10;
+  const BASE_FAN_POWER = 2; // Baseline for normal operation
+  
+  // Calculate deltas
+  const vpdDelta = currentVPD - targetVPD; // Positive = too high (dry), Negative = too low (humid)
+  const humidityDelta = currentHumidity - targetHumidity; // Positive = too high, Negative = too low
+  const tempDelta = currentTemp - targetTemp; // Positive = too high, Negative = too low
+  
+  // Start with baseline
+  let targetPower = BASE_FAN_POWER;
+  
+  // VPD-based adjustments (highest priority for plant health)
+  if (vpdDelta > 0.3) {
+    // VPD too high (air too dry) - reduce fan to retain moisture
+    // Each 0.1 kPa over target = reduce by 0.5 power
+    const reduction = Math.min(vpdDelta * 5, 3); // Max reduction of 3
+    targetPower = Math.max(BASE_FAN_POWER - reduction, MIN_FAN_POWER);
+  } else if (vpdDelta < -0.2) {
+    // VPD too low (air too humid) - increase fan to remove moisture
+    // Each 0.1 kPa under target = increase by 1 power
+    const increase = Math.min(Math.abs(vpdDelta) * 10, 5); // Max increase of 5
+    targetPower = Math.min(BASE_FAN_POWER + increase, MAX_FAN_POWER);
+  }
+  
+  // Humidity-based adjustments (secondary priority)
+  if (Math.abs(vpdDelta) < 0.2) {
+    // Only adjust for humidity if VPD is close to target
+    if (humidityDelta > 10) {
+      // Humidity way too high - increase fan
+      const increase = Math.min((humidityDelta - 10) / 5, 3); // Max increase of 3
+      targetPower = Math.min(targetPower + increase, MAX_FAN_POWER);
+    } else if (humidityDelta < -10) {
+      // Humidity way too low - reduce fan
+      const reduction = Math.min(Math.abs(humidityDelta - 10) / 5, 2); // Max reduction of 2
+      targetPower = Math.max(targetPower - reduction, MIN_FAN_POWER);
+    }
+  }
+  
+  // Temperature-based adjustments (only if VPD allows)
+  if (Math.abs(vpdDelta) < 0.15) {
+    // VPD is good, can use fan for temperature control
+    if (tempDelta > 3) {
+      // Temperature too high - increase fan for cooling
+      const increase = Math.min(tempDelta / 2, 3); // Max increase of 3
+      targetPower = Math.min(targetPower + increase, MAX_FAN_POWER);
+    } else if (tempDelta < -2) {
+      // Temperature too low - reduce fan to retain heat
+      const reduction = Math.min(Math.abs(tempDelta) / 2, 2); // Max reduction of 2
+      targetPower = Math.max(targetPower - reduction, MIN_FAN_POWER);
+    }
+  }
+  
+  // Round to nearest integer
+  targetPower = Math.round(targetPower);
+  
+  // Ensure within bounds
+  targetPower = Math.max(MIN_FAN_POWER, Math.min(MAX_FAN_POWER, targetPower));
+  
+  // Only change if difference is significant (avoid micro-adjustments)
+  const powerDelta = Math.abs(targetPower - currentFanPower);
+  if (powerDelta < 1) {
+    // Keep current power if change is less than 1 level
+    return currentFanPower;
+  }
+  
+  return targetPower;
+}
+
+/**
  * Main environment controller class
  */
 export class EnvironmentController {
@@ -151,7 +234,7 @@ export class EnvironmentController {
     // Process each problem in priority order
     for (const problem of problems) {
       switch (problem.type) {
-        case 'VPD_HIGH':
+        case 'VPD_HIGH': {
           // VPD too high = air too dry
           // Root causes: low humidity OR high temperature
           
@@ -175,14 +258,25 @@ export class EnvironmentController {
               });
             }
             
-            // Check if exhaust fan is working against humidifier
-            if (this.actuators.exhaustFan?.currentPower > 3) {
+            // Calculate optimal fan power (will reduce if too high, but maintain minimum for air exchange)
+            const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
+            const optimalFanPower = calculateOptimalFanPower({
+              currentVPD: this.current.vpd,
+              targetVPD: this.target.vpdOptimal,
+              currentHumidity: this.current.humidity,
+              targetHumidity: this.target.humidityOptimal,
+              currentTemp: this.current.temp,
+              targetTemp: this.target.tempOptimal,
+              currentFanPower: currentFanPower,
+            });
+            
+            if (optimalFanPower !== currentFanPower) {
               actions.push({
                 device: 'exhaustFan',
-                action: 'reduce_power',
-                fromPower: this.actuators.exhaustFan.currentPower,
-                toPower: 2,
-                reason: 'Reduce air exchange to retain moisture (coordinated with humidifier)',
+                action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
+                toPower: optimalFanPower,
+                fromPower: currentFanPower,
+                reason: `Adjust fan to ${optimalFanPower} to retain moisture (VPD: ${this.current.vpd.toFixed(2)}→${this.target.vpdOptimal.toFixed(2)} kPa)`,
                 priority: 2,
               });
             }
@@ -198,40 +292,70 @@ export class EnvironmentController {
             });
           }
           break;
+        }
           
-        case 'VPD_LOW':
+        case 'VPD_LOW': {
           // VPD too low = air too humid
           // Solutions: increase exhaust, reduce humidifier, increase temp
           
-          actions.push({
-            device: 'humidifier',
-            action: 'turn_off',
-            reason: 'Stop adding moisture (VPD too low)',
-            priority: 1,
+          // Only add turn_off action if not already off
+          const vpdLowCurrentMode = this.actuators.humidifier?.mode;
+          if (vpdLowCurrentMode !== 'Off') {
+            actions.push({
+              device: 'humidifier',
+              action: 'turn_off',
+              reason: 'Stop adding moisture (VPD too low)',
+              priority: 1,
+            });
+          }
+          
+          // Calculate optimal fan power based on conditions
+          const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
+          const optimalFanPower = calculateOptimalFanPower({
+            currentVPD: this.current.vpd,
+            targetVPD: this.target.vpdOptimal,
+            currentHumidity: this.current.humidity,
+            targetHumidity: this.target.humidityOptimal,
+            currentTemp: this.current.temp,
+            targetTemp: this.target.tempOptimal,
+            currentFanPower: currentFanPower,
           });
           
-          // Increase air exchange if safe (won't overcool)
-          if (this.current.temp > this.target.tempMin + 2) {
+          if (optimalFanPower !== currentFanPower) {
             actions.push({
               device: 'exhaustFan',
-              action: 'increase_power',
-              toPower: Math.min((this.actuators.exhaustFan?.currentPower || 5) + 2, 10),
-              reason: 'Increase air exchange to remove excess moisture',
+              action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
+              toPower: optimalFanPower,
+              fromPower: currentFanPower,
+              reason: `Adjust fan to ${optimalFanPower} (VPD: ${this.current.vpd.toFixed(2)}→${this.target.vpdOptimal.toFixed(2)} kPa, Humidity: ${this.current.humidity.toFixed(1)}%)`,
               priority: 2,
             });
           }
           break;
+        }
           
-        case 'TEMP_HIGH':
+        case 'TEMP_HIGH': {
           // Temperature too high
           
-          // Can we increase exhaust without hurting VPD?
-          if (this.current.vpd < this.target.vpdMax - 0.1) {
+          // Calculate optimal fan power (will consider VPD constraints)
+          const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
+          const optimalFanPower = calculateOptimalFanPower({
+            currentVPD: this.current.vpd,
+            targetVPD: this.target.vpdOptimal,
+            currentHumidity: this.current.humidity,
+            targetHumidity: this.target.humidityOptimal,
+            currentTemp: this.current.temp,
+            targetTemp: this.target.tempOptimal,
+            currentFanPower: currentFanPower,
+          });
+          
+          if (optimalFanPower !== currentFanPower) {
             actions.push({
               device: 'exhaustFan',
-              action: 'increase_power',
-              toPower: Math.min((this.actuators.exhaustFan?.currentPower || 5) + 2, 10),
-              reason: 'Increase air exchange to cool tent (VPD has headroom)',
+              action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
+              toPower: optimalFanPower,
+              fromPower: currentFanPower,
+              reason: `Adjust fan to ${optimalFanPower} for cooling (VPD: ${this.current.vpd.toFixed(2)} kPa, Temp: ${this.current.temp.toFixed(1)}°F)`,
               priority: 1,
             });
           } else {
@@ -245,8 +369,9 @@ export class EnvironmentController {
             });
           }
           break;
+        }
           
-        case 'TEMP_LOW':
+        case 'TEMP_LOW': {
           // Temperature too low
           actions.push({
             device: 'heater',
@@ -256,8 +381,9 @@ export class EnvironmentController {
             priority: 1,
           });
           break;
+        }
           
-        case 'HUMIDITY_LOW':
+        case 'HUMIDITY_LOW': {
           // Humidity too low - use MAX intensity (10)
           const currentIntensity = this.actuators.humidifier?.currentPower || 0;
           const currentMode = this.actuators.humidifier?.mode;
@@ -277,37 +403,70 @@ export class EnvironmentController {
             });
           }
           
-          // Reduce exhaust if removing moisture too fast
-          if (this.actuators.exhaustFan?.currentPower > 3) {
+          // Calculate optimal fan power to balance moisture retention
+          const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
+          const optimalFanPower = calculateOptimalFanPower({
+            currentVPD: this.current.vpd,
+            targetVPD: this.target.vpdOptimal,
+            currentHumidity: this.current.humidity,
+            targetHumidity: this.target.humidityOptimal,
+            currentTemp: this.current.temp,
+            targetTemp: this.target.tempOptimal,
+            currentFanPower: currentFanPower,
+          });
+          
+          if (optimalFanPower !== currentFanPower) {
             actions.push({
               device: 'exhaustFan',
-              action: 'reduce_power',
-              toPower: 2,
-              reason: 'Retain moisture in tent',
+              action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
+              toPower: optimalFanPower,
+              fromPower: currentFanPower,
+              reason: `Adjust fan to ${optimalFanPower} to balance moisture (VPD: ${this.current.vpd.toFixed(2)} kPa, Humidity: ${this.current.humidity.toFixed(1)}%)`,
               priority: 2,
             });
           }
           break;
+        }
           
-        case 'HUMIDITY_HIGH':
+        case 'HUMIDITY_HIGH': {
           // Humidity too high - turn OFF (only if way too high, +10% over max)
           if (this.current.humidity > this.target.humidityMax + 10) {
-            actions.push({
-              device: 'humidifier',
-              action: 'turn_off',
-              reason: `Humidity ${this.current.humidity.toFixed(1)}% exceeds max by 10%+`,
-              priority: 1,
-            });
+            // Only add turn_off action if not already off
+            const humidityHighCurrentMode = this.actuators.humidifier?.mode;
+            if (humidityHighCurrentMode !== 'Off') {
+              actions.push({
+                device: 'humidifier',
+                action: 'turn_off',
+                reason: `Humidity ${this.current.humidity.toFixed(1)}% exceeds max by 10%+`,
+                priority: 1,
+              });
+            }
           }
           
-          actions.push({
-            device: 'exhaustFan',
-            action: 'increase_power',
-            toPower: Math.min((this.actuators.exhaustFan?.currentPower || 5) + 2, 10),
-            reason: 'Increase air exchange to remove excess moisture',
-            priority: 2,
+          // Calculate optimal fan power to remove excess moisture
+          const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
+          const optimalFanPower = calculateOptimalFanPower({
+            currentVPD: this.current.vpd,
+            targetVPD: this.target.vpdOptimal,
+            currentHumidity: this.current.humidity,
+            targetHumidity: this.target.humidityOptimal,
+            currentTemp: this.current.temp,
+            targetTemp: this.target.tempOptimal,
+            currentFanPower: currentFanPower,
           });
+          
+          if (optimalFanPower !== currentFanPower) {
+            actions.push({
+              device: 'exhaustFan',
+              action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
+              toPower: optimalFanPower,
+              fromPower: currentFanPower,
+              reason: `Adjust fan to ${optimalFanPower} to remove excess moisture (Humidity: ${this.current.humidity.toFixed(1)}%, VPD: ${this.current.vpd.toFixed(2)} kPa)`,
+              priority: 2,
+            });
+          }
           break;
+        }
       }
     }
     
@@ -528,10 +687,23 @@ export class EnvironmentController {
             }
             // Turn on/off (used for VPD_LOW or HUMIDITY_HIGH cases)
             else if (action.action === 'turn_on') {
-              // Simple ON - also try to set intensity to 10
+              // Check current state FIRST to avoid unnecessary API calls
+              const currentHumidifierState = getEntityState?.(ENTITIES.HUMIDIFIER_MODE);
+              if (currentHumidifierState === 'On') {
+                console.log(`[ENV-CTRL] Humidifier already ON, skipping service call`);
+                results.push({ 
+                  action, 
+                  success: true,
+                  skipped: true,
+                  reason: 'Already On',
+                });
+                continue;
+              }
+              
+              // Not already On - turn it on and set intensity to 10
               console.log('[ENV-CTRL] Turning humidifier ON at max intensity');
               
-              // First set intensity
+              // First set intensity (before turning on, so it's ready when it starts)
               try {
                 const intensityResult = await callService('number', 'set_value', {
                   entity_id: ENTITIES.HUMIDIFIER_ON_POWER,
@@ -545,18 +717,6 @@ export class EnvironmentController {
               }
               
               // Then turn ON
-              const currentHumidifierState = getEntityState?.(ENTITIES.HUMIDIFIER_MODE);
-              if (currentHumidifierState === 'On') {
-                console.log(`[ENV-CTRL] Humidifier already ON, skipping service call`);
-                results.push({ 
-                  action, 
-                  success: true,
-                  skipped: true,
-                  reason: 'Already On',
-                });
-                continue;
-              }
-              
               serviceResult = await callService('select', 'select_option', {
                 entity_id: ENTITIES.HUMIDIFIER_MODE,
                 option: 'On',
@@ -591,10 +751,53 @@ export class EnvironmentController {
             
           case 'exhaustFan':
             if (action.action === 'reduce_power' || action.action === 'increase_power') {
+              // Check current fan mode - power control only works when mode is "On"
+              const currentFanMode = getEntityState?.(ENTITIES.EXHAUST_FAN_MODE);
+              const currentFanPower = parseFloat(getEntityState?.(ENTITIES.EXHAUST_FAN_CURRENT_POWER) || 0);
+              
+              // If fan is in Auto or Off mode, we need to turn it On first
+              if (currentFanMode !== 'On') {
+                console.log(`[ENV-CTRL] Exhaust fan is in "${currentFanMode}" mode, changing to "On" first`);
+                const modeResult = await callService('select', 'select_option', {
+                  entity_id: ENTITIES.EXHAUST_FAN_MODE,
+                  option: 'On',
+                });
+                
+                if (!modeResult?.success) {
+                  console.error(`[ENV-CTRL] Failed to set exhaust fan mode to On: ${modeResult?.error || 'Unknown error'}`);
+                  results.push({
+                    action,
+                    success: false,
+                    error: `Cannot set power: ${modeResult?.error || 'Failed to turn fan On'}`,
+                  });
+                  continue;
+                }
+                
+                // Wait a moment for the device to register the On state
+                console.log(`[ENV-CTRL] Waiting 2s for fan to register On state...`);
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+              
+              // Check if already at target power (skip if close)
+              // Re-check current power right before making the call (state may have changed)
+              const recheckedFanPower = parseFloat(getEntityState?.(ENTITIES.EXHAUST_FAN_CURRENT_POWER) || 0);
+              if (Math.abs(recheckedFanPower - action.toPower) < 1) {
+                console.log(`[ENV-CTRL] Exhaust fan already at power ${recheckedFanPower} (target ${action.toPower}), skipping API call`);
+                results.push({
+                  action,
+                  success: true,
+                  skipped: true,
+                  reason: `Already at power ${recheckedFanPower}`,
+                });
+                continue;
+              }
+              
+              console.log(`[ENV-CTRL] Setting exhaust fan power: ${recheckedFanPower} → ${action.toPower}`);
               serviceResult = await callService('number', 'set_value', {
                 entity_id: ENTITIES.EXHAUST_FAN_ON_POWER,
                 value: action.toPower,
               });
+              
               // Update cooldown only on success
               if (serviceResult?.success === true) {
                 cooldownRef.current[actionKey] = Date.now();
@@ -686,6 +889,28 @@ export class EnvironmentController {
             console.warn('[ENV-CTRL] AC Infinity API error detected (code 100001)');
             console.warn('  This is likely rate limiting or device state conflict.');
             console.warn('  The device may already be in the requested state.');
+            
+            // For exhaust fan, check if already at target state
+            if (action.device === 'exhaustFan' && (action.action === 'reduce_power' || action.action === 'increase_power')) {
+              // Wait a moment and re-check actual state
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const finalFanPower = parseFloat(getEntityState?.(ENTITIES.EXHAUST_FAN_CURRENT_POWER) || 0);
+              
+              // If device is already at or very close to target, treat as success
+              if (Math.abs(finalFanPower - action.toPower) <= 1) {
+                console.log(`[ENV-CTRL] AC Infinity error, but fan is at power ${finalFanPower} (target ${action.toPower}) - treating as success`);
+                results.push({
+                  action,
+                  success: true,
+                  wasAlreadyAtTarget: true,
+                  reason: `Device already at power ${finalFanPower}`,
+                });
+                // Set cooldown to prevent retries
+                cooldownRef.current[actionKey] = Date.now();
+                continue; // Skip the error result
+              }
+            }
+            
             console.warn('  Cooldown will be extended to prevent further errors.');
             
             // Extend cooldown for AC Infinity errors to prevent rapid retries
@@ -737,6 +962,10 @@ export class EnvironmentController {
  * @returns {EnvironmentController}
  */
 export function createControllerFromState(entities, stage) {
+  if (!stage) {
+    console.warn('[ENV-CTRL] No stage provided, using default targets');
+  }
+  
   // Extract current state
   const currentState = {
     temp: parseFloat(entities[ENTITIES.TEMPERATURE]?.state || 0),
@@ -744,18 +973,27 @@ export function createControllerFromState(entities, stage) {
     vpd: parseFloat(entities[ENTITIES.VPD]?.state || 0),
   };
   
-  // Extract target state from stage
+  // Extract target state from stage (with fallbacks)
   const targetState = {
-    tempMin: stage.temperature?.day?.min || 75,
-    tempMax: stage.temperature?.day?.max || 82,
-    tempOptimal: stage.temperature?.day?.target || 77,
-    humidityMin: stage.humidity?.min || 65,
-    humidityMax: stage.humidity?.max || 75,
-    humidityOptimal: stage.humidity?.optimal || 70,
-    vpdMin: stage.vpd?.min || 0.4,
-    vpdMax: stage.vpd?.max || 0.8,
-    vpdOptimal: stage.vpd?.optimal || 0.6,
+    tempMin: stage?.temperature?.day?.min || 75,
+    tempMax: stage?.temperature?.day?.max || 82,
+    tempOptimal: stage?.temperature?.day?.target || 77,
+    humidityMin: stage?.humidity?.min || 65,
+    humidityMax: stage?.humidity?.max || 75,
+    humidityOptimal: stage?.humidity?.optimal || 70,
+    vpdMin: stage?.vpd?.min || 0.4,
+    vpdMax: stage?.vpd?.max || 0.8,
+    vpdOptimal: stage?.vpd?.optimal || 0.6,
   };
+  
+  // Log targets for debugging
+  if (stage) {
+    console.log(`[ENV-CTRL] Stage targets (${stage.name || 'unknown'}):`, {
+      temp: `${targetState.tempMin}-${targetState.tempMax}°F (target: ${targetState.tempOptimal}°F)`,
+      humidity: `${targetState.humidityMin}-${targetState.humidityMax}% (optimal: ${targetState.humidityOptimal}%)`,
+      vpd: `${targetState.vpdMin}-${targetState.vpdMax} kPa (optimal: ${targetState.vpdOptimal} kPa)`,
+    });
+  }
   
   // Extract actuator states
   const actuators = {

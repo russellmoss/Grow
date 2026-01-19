@@ -284,10 +284,24 @@ export default function StageSelector() {
               </div>
             </div>
 
-            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-6">
-              <p className="text-sm text-yellow-400">
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
+              <p className="text-sm text-yellow-400 mb-2">
                 ⚠️ Your existing automations will be updated.
               </p>
+              <div className="text-xs text-zinc-400 mt-2 space-y-1">
+                <p className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span>
+                  Light schedule automations (HA)
+                </p>
+                <p className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span>
+                  Temperature schedule automations (HA)
+                </p>
+                <p className="flex items-center gap-2">
+                  <span className="text-blue-400">🧠</span>
+                  VPD, humidity, and fan control (Dashboard Brain)
+                </p>
+              </div>
             </div>
 
             {/* Buttons */}

@@ -31,6 +31,27 @@ const CONFLICTING_AUTOMATIONS = [
 ];
 
 /**
+ * Automation IDs that conflict with the dashboard controller ("brain")
+ * These should be skipped when the dashboard controller is active
+ * to prevent rate limit conflicts with AC Infinity API
+ * 
+ * The dashboard controller intelligently handles:
+ * - Humidifier On/Off and intensity control
+ * - Exhaust fan power adjustments
+ * - Coordinated VPD management
+ * 
+ * These HA automations are simple threshold-based and would conflict.
+ */
+export const CONTROLLER_CONFLICTING_AUTOMATIONS = [
+  AUTOMATION_IDS.VPD_HUMID_ON,      // Controller handles humidifier On/Off
+  AUTOMATION_IDS.VPD_HUMID_OFF,     // Controller handles humidifier On/Off
+  AUTOMATION_IDS.VPD_FAN_REDUCE,    // Controller handles fan power
+  AUTOMATION_IDS.VPD_FAN_RESTORE,   // Controller handles fan power
+  // Note: TEMP_DAY/NIGHT can coexist (heater isn't AC Infinity, less rate limiting)
+  // but consider disabling if conflicts occur
+];
+
+/**
  * Build automation config for lights ON
  * @param {Object} stage - Growth stage object
  * @returns {Object} Automation config
@@ -394,23 +415,49 @@ export function buildVPDFanRestoreAutomation(stage) {
 
 /**
  * Build all automation configs for a stage
+ * 
+ * By default, skips automations that conflict with the dashboard controller ("brain").
+ * The brain handles: humidifier On/Off, exhaust fan power, and coordinated VPD control.
+ * 
  * @param {Object} stage - Growth stage object
+ * @param {Object} options - Options for building automations
+ * @param {boolean} options.skipControllerConflicts - Skip automations that conflict with dashboard controller (default: true)
  * @returns {Object[]} Array of automation configs
  */
-export function buildAllAutomations(stage) {
-  const automations = [
+export function buildAllAutomations(stage, options = {}) {
+  const { skipControllerConflicts = true } = options;
+  
+  const allAutomations = [
     buildLightOnAutomation(stage),
     buildLightOffAutomation(stage),
     buildDayTempAutomation(stage),
     buildNightTempAutomation(stage),
     buildVPDHumidifierOnAutomation(stage),
     buildVPDHumidifierOffAutomation(stage),
-    buildVPDFanReduceAutomation(stage),    // NEW: Coordinated fan control
-    buildVPDFanRestoreAutomation(stage),   // NEW: Coordinated fan control
+    buildVPDFanReduceAutomation(stage),
+    buildVPDFanRestoreAutomation(stage),
   ];
 
   // Filter out nulls (harvest_dry skips some automations)
-  return automations.filter(Boolean);
+  let automations = allAutomations.filter(Boolean);
+  
+  // Skip automations that conflict with dashboard controller
+  if (skipControllerConflicts) {
+    const beforeCount = automations.length;
+    automations = automations.filter(automation => 
+      !CONTROLLER_CONFLICTING_AUTOMATIONS.includes(automation.id)
+    );
+    const skippedCount = beforeCount - automations.length;
+    if (skippedCount > 0) {
+      console.log(`[AUTO-MGR] Skipped ${skippedCount} automations that conflict with dashboard controller`);
+      console.log(`[AUTO-MGR] Skipped IDs:`, CONTROLLER_CONFLICTING_AUTOMATIONS.filter(id => 
+        allAutomations.some(a => a && a.id === id)
+      ));
+      console.log(`[AUTO-MGR] Dashboard brain handles: humidifier On/Off, exhaust fan power, VPD coordination`);
+    }
+  }
+  
+  return automations;
 }
 
 /**
@@ -491,8 +538,14 @@ export function automationToYAML(config) {
  * @param {Object} stage - Growth stage object
  * @returns {string} Complete YAML for all automations
  */
-export function generateAllYAML(stage) {
-  const automations = buildAllAutomations(stage);
+/**
+ * Generate YAML for all automations (for manual deployment if needed)
+ * @param {Object} stage - Growth stage object
+ * @param {Object} options - Options (same as buildAllAutomations)
+ * @returns {string} Complete YAML for all automations
+ */
+export function generateAllYAML(stage, options = {}) {
+  const automations = buildAllAutomations(stage, options);
   return automations.map(automationToYAML).join('\n\n');
 }
 
@@ -507,6 +560,16 @@ export function generateAllYAML(stage) {
  * @param {Function} options.disableAutomation - Function to disable an automation
  * @returns {Promise<Object>} Deployment result
  */
+/**
+ * Deploy automations to Home Assistant
+ * 
+ * @param {Object} stage - Growth stage object
+ * @param {Object} options - Deployment options
+ * @param {Function} options.createAutomation - Function to create/update automation in HA
+ * @param {Function} options.reloadAutomations - Function to reload automations in HA
+ * @param {Function} options.disableAutomation - Function to disable an automation
+ * @param {boolean} options.skipControllerConflicts - Skip automations that conflict with dashboard controller (default: true)
+ */
 export async function deployStageAutomations(stage, options = {}) {
   const {
     dryRun = false,
@@ -515,14 +578,19 @@ export async function deployStageAutomations(stage, options = {}) {
     disableAutomation,
   } = options;
 
+  const { skipControllerConflicts = true } = options;
+  
   console.log(`[AUTO-MGR] Building automations for stage: ${stage.name}`);
+  if (skipControllerConflicts) {
+    console.log(`[AUTO-MGR] Skipping automations that conflict with dashboard controller`);
+  }
   console.log(`[AUTO-MGR] Stage data:`, {
     lightSchedule: stage.lightSchedule,
     temperature: stage.temperature,
     vpd: stage.vpd,
   });
   
-  const configs = buildAllAutomations(stage);
+  const configs = buildAllAutomations(stage, { skipControllerConflicts });
   console.log(`[AUTO-MGR] Built ${configs.length} automation configs:`, configs.map(c => c.id));
   
   if (dryRun) {

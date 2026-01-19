@@ -74,6 +74,19 @@ export function useEnvironmentController({
     
     console.log('[ENV-CTRL] Starting environment analysis...');
     
+    // Log the stage targets being used
+    if (currentStage) {
+      console.log('[ENV-CTRL] Using stage targets:', {
+        stage: currentStage.name,
+        temp: {
+          day: currentStage.temperature?.day || {},
+          night: currentStage.temperature?.night || {},
+        },
+        humidity: currentStage.humidity || {},
+        vpd: currentStage.vpd || {},
+      });
+    }
+    
     try {
       // Create controller from current state
       const controller = createControllerFromState(entities, currentStage);
@@ -184,12 +197,12 @@ export function useEnvironmentController({
 
     console.log(`[ENV-CTRL] Starting controller with ${intervalMinutes}min interval`);
     
-    // Run once on mount (with delay to let WebSocket data load)
+    // Run once on mount (with delay to let rate limits clear and WebSocket data load)
     const initialTimeout = setTimeout(() => {
-      if (!isRunningRef.current) {
+      if (!isRunningRef.current && enabled) {
         runControllerRef.current();
       }
-    }, 5000); // 5 second delay for WebSocket to connect
+    }, 30000); // 30 second delay to avoid rate limits on page refresh
     
     // Then run on interval
     intervalRef.current = setInterval(() => {
