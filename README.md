@@ -18,7 +18,7 @@ Automated indoor grow environment management using Home Assistant, with AI-assis
 | 💧 Humidity | 33.7% | 65-75% | ❌ Critical |
 | 📊 VPD | 2.6 kPa | 0.4-0.8 kPa | ❌ Critical |
 
-**Priority:** Add CloudForge T7 humidifier to address 30% basement humidity
+**Priority:** ✅ CloudForge T5 humidifier integrated - Deploy VPD-based automation
 
 ## Environment
 
@@ -34,7 +34,7 @@ Automated indoor grow environment management using Home Assistant, with AI-assis
 | Grow Light | `switch.light` | ✅ Online |
 | Tent Heater | `climate.tent_heater` | ✅ Heat Mode |
 | AC Infinity Controller | `sensor.ac_infinity_*` | ✅ Online |
-| CloudForge T7 | `humidifier.cloudforge_t7` | ⏳ Pending |
+| **CloudForge T5 Humidifier** | `select.cloudforge_t5_active_mode` | ✅ **Integrated** (Port 2) |
 | Vevor Distiller | Manual | ✅ Available |
 
 ## Schedules

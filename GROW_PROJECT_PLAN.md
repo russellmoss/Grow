@@ -57,7 +57,7 @@
 | Exhaust Fan | `binary_sensor.exhaust_fan_*` | ✅ Running | Power level 5 |
 | Tent Heater | `climate.tent_heater` | ✅ Heat Mode | Thermostat |
 | **Grow Light** | `switch.light` | ✅ Online | Third Reality Zigbee Plug |
-| **Humidifier** | `humidifier.cloudforge_t7` | ⏳ Pending | AC Infinity CloudForge T7 (9L) |
+| **CloudForge T5 Humidifier** | `select.cloudforge_t5_active_mode` | ✅ **Integrated** | AC Infinity Port 2 |
 | **Water Distiller** | N/A (Manual) | ✅ Available | Vevor 1.1 gal / 4 hours |
 
 ### 2.2 Current Sensor Readings
@@ -86,7 +86,7 @@ VPD:          2.6 kPa   (Target: 0.4-0.8 kPa) ⚠️ CRITICAL
 
 | Challenge | Baseline Value | Impact | Mitigation |
 |-----------|---------------|--------|------------|
-| **Basement Humidity** | ~30% RH | VPD too high, plant stress | CloudForge T7 required |
+| **Basement Humidity** | ~30% RH | VPD too high, plant stress | ✅ CloudForge T5 integrated - automation pending |
 | **Albany Tap Water** | 7.77 pH | Too alkaline for plants | pH Down to 6.4-6.5 |
 
 ### 3.2 Water Chemistry Protocol
@@ -112,7 +112,7 @@ baseline_temp: ~65°F (seasonal variation)
 
 critical_notes:
   - Humidifier must run continuously during seedling stage
-  - 9L CloudForge T7 tank provides adequate runtime
+  - CloudForge T5 integrated on Port 2 - ready for VPD automation
   - Winter months particularly dry
 ```
 
@@ -345,7 +345,7 @@ headers: {
 ### Phase 3: Humidity Integration
 **Duration:** 2-3 days
 
-- [ ] Add CloudForge T7 to Home Assistant
+- [x] Add CloudForge T5 to Home Assistant ✅ (Port 2, integrated)
 - [ ] Update MANIFEST.md with humidifier entity
 - [ ] Create VPD-based humidity automation
 - [ ] Create VPD alert system

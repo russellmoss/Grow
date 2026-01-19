@@ -450,23 +450,87 @@ location: Network Closet
 
 ---
 
-## 6. Unavailable Entities (AC Infinity Ports 2, 3, 4)
+## 6. Humidity Control - CloudForge T5
 
-### Port 2 Entities
-All entities with pattern `*_port_2_*` are **unavailable**:
-- `binary_sensor.new_device_port_2_state`
-- `binary_sensor.new_device_port_2_status`
-- `sensor.new_device_port_2_current_power`
-- `sensor.new_device_port_2_next_state_change`
-- `sensor.new_device_port_2_remaining_time`
-- `select.new_device_port_2_active_mode`
-- `select.new_device_port_2_auto_settings_mode`
-- `select.new_device_port_2_device_type`
-- `select.new_device_port_2_dynamic_response`
-- `select.new_device_port_2_vpd_settings_mode`
-- All `switch.new_device_port_2_*` trigger switches
+### 6.1 Active Mode Selector
+```yaml
+entity_id: select.cloudforge_t5_active_mode
+friendly_name: CloudForge T5 Active Mode
+current_state: Off
+status: ✅ Available
+options: [On, Off, Auto]
+device: AC Infinity CloudForge T5
+port: 2
+location: Tent
+```
 
-**Planned Use:** CloudForge T7 Humidifier (pending integration)
+**Current Mode:** Off  
+**Purpose:** Control humidifier to maintain target humidity (65-75% for seedling) and VPD (0.4-0.8 kPa)
+
+### 6.2 State Binary Sensor
+```yaml
+entity_id: binary_sensor.cloudforge_t5_state
+friendly_name: CloudForge T5 State
+current_state: off
+status: ✅ Available
+```
+
+**Status:** Currently OFF
+
+### 6.3 Status Binary Sensor
+```yaml
+entity_id: binary_sensor.cloudforge_t5_status
+friendly_name: CloudForge T5 Status
+current_state: on
+status: ✅ Available
+```
+
+**Status:** Device is online and operational
+
+### 6.4 Device Type Selector
+```yaml
+entity_id: select.cloudforge_t5_device_type
+friendly_name: CloudForge T5 Device Type
+current_state: No Device Type
+status: ✅ Available
+```
+
+### 6.5 Dynamic Response Selector
+```yaml
+entity_id: select.cloudforge_t5_dynamic_response
+friendly_name: CloudForge T5 Dynamic Response
+current_state: Transition
+status: ✅ Available
+```
+
+### 6.6 VPD Settings Mode
+```yaml
+entity_id: select.cloudforge_t5_vpd_settings_mode
+friendly_name: CloudForge T5 VPD Settings Mode
+current_state: unavailable
+status: ❌ Unavailable
+```
+
+### 6.7 Trigger Enable Switches
+All CloudForge T5 trigger switches are available but most are unavailable:
+- `switch.cloudforge_t5_humidity_high_trigger_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_humidity_low_trigger_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_temperature_high_trigger_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_temperature_low_trigger_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_vpd_high_trigger_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_vpd_low_trigger_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_scheduled_on_time_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_scheduled_off_time_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_target_humidity_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_target_temperature_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_target_vpd_enabled` - ❌ Unavailable
+- `switch.cloudforge_t5_sunrise_sunset_enabled` - ✅ Available (state: off)
+
+**Note:** Control via `select.cloudforge_t5_active_mode` (On/Off/Auto) for VPD-based automation.
+
+---
+
+## 7. Unavailable Entities (AC Infinity Ports 3, 4)
 
 ### Port 3 Entities
 All entities with pattern `*_port_3_*` are **unavailable**:
@@ -478,12 +542,15 @@ All entities with pattern `*_port_4_*` are **unavailable**:
 - Same pattern as Port 2
 - No planned use currently
 
+**Note:** Port 2 is now active with CloudForge T5 Humidifier (see Section 6 above)
+
 ---
 
-## 7. Entity Status Summary
+## 8. Entity Status Summary
 
 ### Available Entities (Grow-Related)
 - ✅ AC Infinity Controller sensors (temp, humidity, VPD)
+- ✅ **CloudForge T5 Humidifier** (Port 2, currently Off)
 - ✅ Tent Heater (climate control)
 - ✅ Exhaust Fan (active, power level 5)
 - ✅ Grow Light (on, 96.4W)
@@ -492,15 +559,15 @@ All entities with pattern `*_port_4_*` are **unavailable**:
 - ✅ Grow Room Sensor (secondary temp/humidity)
 
 ### Unavailable Entities
-- ❌ All Port 2 entities (CloudForge T7 pending)
 - ❌ All Port 3 entities (no device)
 - ❌ All Port 4 entities (no device)
 - ❌ Most exhaust fan trigger switches
 - ❌ Exhaust fan auto/VPD settings modes
+- ❌ Most CloudForge T5 trigger switches (use active_mode instead)
 
 ---
 
-## 8. Entity Relationships
+## 9. Entity Relationships
 
 ### Climate Control Chain
 ```
@@ -508,10 +575,10 @@ sensor.ac_infinity_controller_69_pro_temperature
   └─► climate.tent_heater (target: 80°F day / 70°F night)
 
 sensor.ac_infinity_controller_69_pro_humidity
-  └─► [PENDING] humidifier.cloudforge_t7 (target: 70% seedling)
+  └─► select.cloudforge_t5_active_mode (On/Off/Auto for 65-75% target)
 
 sensor.ac_infinity_controller_69_pro_vpd
-  └─► [PENDING] VPD-based automation (target: 0.4-0.8 kPa)
+  └─► select.cloudforge_t5_active_mode (VPD-based control: 0.4-0.8 kPa target)
 ```
 
 ### Lighting Chain
@@ -530,7 +597,7 @@ select.exhaust_fan_active_mode (On/Off/Auto)
 
 ---
 
-## 9. Quick Reference
+## 10. Quick Reference
 
 ### Critical Sensors
 | Entity | Current | Target | Status |
@@ -555,12 +622,13 @@ select.exhaust_fan_active_mode (On/Off/Auto)
 
 ---
 
-## 10. Changelog
+## 11. Changelog
 
 | Date | Change |
 |------|--------|
 | 2026-01-18 | Initial entity documentation created from MCP data |
 | 2026-01-18 | Added power monitoring details, leak sensor, secondary sensors |
+| 2026-01-18 | Added CloudForge T5 Humidifier (Port 2) - integrated and operational |
 
 ---
 

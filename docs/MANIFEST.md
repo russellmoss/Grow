@@ -20,7 +20,7 @@
 
 | Challenge | Baseline | Mitigation |
 |-----------|----------|------------|
-| **Basement Humidity** | ~30% RH | CloudForge T7 humidifier required |
+| **Basement Humidity** | ~30% RH | CloudForge T5 humidifier ✅ INTEGRATED |
 | **Albany Tap Water pH** | 7.77 pH | pH down to 6.4-6.5 before use |
 
 ---
@@ -35,6 +35,7 @@
 | Exhaust Fan | `binary_sensor.exhaust_fan_*` | Tent Top | ✅ Running | Power level 5 |
 | Tent Heater | `climate.tent_heater` | Tent Floor | ✅ Heat Mode | Thermostat control |
 | **Grow Light** | `switch.light` | Tent Ceiling | ✅ Online | Third Reality Zigbee Plug (96.4W) |
+| **CloudForge T5 Humidifier** | `select.cloudforge_t5_active_mode` | Tent | ✅ Online | Port 2, AC Infinity Controller |
 | Intake Air Fan | `switch.intake_air` | Tent | ✅ Online | 16.8W power draw |
 | Grow Room Sensor | `sensor.sensor_grow_room_*` | Tent | ✅ Online | Secondary temp/humidity sensor |
 | Leak Sensor #1 | `binary_sensor.leak_sensor_1` | Tent Floor | ✅ Online | 69.5% battery |
@@ -44,7 +45,7 @@
 
 | Device | Expected Entity | Connection Type | Priority | Notes |
 |--------|-----------------|-----------------|----------|-------|
-| **CloudForge T7 Humidifier** | `humidifier.cloudforge_t7` | AC Infinity Cloud | 🔴 High | 9L tank capacity |
+| ~~**CloudForge T7 Humidifier**~~ | ~~`humidifier.cloudforge_t7`~~ | ~~AC Infinity Cloud~~ | ~~🔴 High~~ | ~~9L tank capacity~~ ✅ **INTEGRATED AS T5** |
 
 ### 1.3 Manual Maintenance Devices
 
@@ -54,9 +55,9 @@
 
 ### 1.4 Unused Ports (AC Infinity Controller)
 
-| Port | Entity Pattern | Status | Planned Use |
-|------|---------------|--------|-------------|
-| Port 2 | `*_port_2_*` | ❌ Unavailable | CloudForge T7 (pending) |
+| Port | Entity Pattern | Status | Device |
+|------|---------------|--------|--------|
+| Port 2 | `cloudforge_t5_*` | ✅ **ACTIVE** | **CloudForge T5 Humidifier** |
 | Port 3 | `*_port_3_*` | ❌ Unavailable | — |
 | Port 4 | `*_port_4_*` | ❌ Unavailable | — |
 
@@ -139,19 +140,24 @@ grow_light:
     dark_period: "04:00:00"  # 4 hours off
 ```
 
-### 2.4 Humidity Control (Pending)
+### 2.4 Humidity Control (CloudForge T5)
 
 ```yaml
 humidifier:
-  entity_id: humidifier.cloudforge_t7  # Expected after integration
-  type: humidifier
-  device: AC Infinity CloudForge T7
-  tank_capacity: 9L
-  target_humidity: 70  # Seedling stage
-  connection: AC Infinity Cloud
-  modes:
-    - auto
-    - manual
+  primary_control: select.cloudforge_t5_active_mode
+  state_entity: binary_sensor.cloudforge_t5_state
+  status_entity: binary_sensor.cloudforge_t5_status
+  type: AC Infinity CloudForge T5
+  port: 2
+  connection: AC Infinity Controller 69 Pro
+  current_mode: "Off"
+  available_modes:
+    - "On"
+    - "Off"
+    - "Auto"
+  target_humidity: 70  # Seedling stage (65-75%)
+  purpose: Maintain VPD in 0.4-0.8 kPa range
+  control_method: Turn on/off based on humidity/VPD thresholds
 ```
 
 ---
@@ -368,7 +374,7 @@ steps:
 
 | Name | Priority | Dependencies |
 |------|----------|--------------|
-| VPD Humidity Control | 🔴 High | `humidifier.cloudforge_t7` |
+| VPD Humidity Control | 🟡 Ready to Deploy | `select.cloudforge_t5_active_mode` |
 | VPD Out-of-Range Alert | 🟡 Medium | Notification service |
 | Exhaust Fan Auto Mode | 🟡 Medium | VPD logic |
 

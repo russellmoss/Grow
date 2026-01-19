@@ -202,37 +202,76 @@ action:
 
 ### 4.1 VPD-Based Humidity Control
 
-**Status:** ⏳ Pending CloudForge T7 Integration  
+**Status:** 🟡 Ready to Deploy  
 **Trigger:** VPD sensor exceeds target range  
-**Action:** Adjust humidifier output  
+**Action:** Turn on CloudForge T5 humidifier  
 
 ```yaml
-# DRAFT - Requires humidifier.cloudforge_t7 entity
-alias: "VPD Humidity Control"
-description: "Adjust humidifier based on VPD reading"
+alias: "VPD Humidity Control - Turn On"
+description: "Turn on CloudForge T5 when VPD exceeds 0.8 kPa (seedling upper limit)"
 mode: single
 
 trigger:
   - platform: numeric_state
     entity_id: sensor.ac_infinity_controller_69_pro_vpd
     above: 0.8  # Seedling upper limit
+    for:
+      minutes: 5  # Wait 5 minutes to avoid rapid cycling
 
 condition:
   - condition: state
     entity_id: switch.light
-    state: "on"  # Only during day
+    state: "on"  # Only during day period
+  - condition: state
+    entity_id: select.cloudforge_t5_active_mode
+    state: "Off"  # Only if currently off
 
 action:
-  - service: humidifier.set_humidity
+  - service: select.select_option
     target:
-      entity_id: humidifier.cloudforge_t7
+      entity_id: select.cloudforge_t5_active_mode
     data:
-      humidity: 75
+      option: "On"
+  - service: notify.mobile_app_petey
+    data:
+      title: "🌱 Humidifier Activated"
+      message: "VPD {{ states('sensor.ac_infinity_controller_69_pro_vpd') }} kPa - CloudForge T5 turned ON"
+```
+
+**Turn Off Automation:**
+```yaml
+alias: "VPD Humidity Control - Turn Off"
+description: "Turn off CloudForge T5 when VPD is within optimal range"
+mode: single
+
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.ac_infinity_controller_69_pro_vpd
+    below: 0.6  # Below optimal (0.6 kPa) - turn off to avoid over-humidification
+    for:
+      minutes: 10  # Wait 10 minutes to ensure stable VPD
+
+condition:
+  - condition: state
+    entity_id: select.cloudforge_t5_active_mode
+    state: "On"  # Only if currently on
+
+action:
+  - service: select.select_option
+    target:
+      entity_id: select.cloudforge_t5_active_mode
+    data:
+      option: "Off"
+  - service: notify.mobile_app_petey
+    data:
+      title: "🌱 Humidifier Deactivated"
+      message: "VPD {{ states('sensor.ac_infinity_controller_69_pro_vpd') }} kPa - CloudForge T5 turned OFF"
 ```
 
 **Dependencies:**
-- CloudForge T7 must be integrated with HA
-- Entity `humidifier.cloudforge_t7` must exist
+- ✅ CloudForge T5 integrated with HA
+- ✅ Entity `select.cloudforge_t5_active_mode` exists
+- ✅ VPD sensor operational
 
 ---
 
