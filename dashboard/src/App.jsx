@@ -9,9 +9,8 @@ import { VPDHistoryChart } from './components/charts/VPDHistoryChart';
 import { ClimateHistoryChart } from './components/charts/ClimateHistoryChart';
 import { GrowLog } from './components/log/GrowLog';
 import { LogHistory } from './components/log/LogHistory';
-import { CameraFeed } from './components/CameraFeed';
 import StageSelector from './components/StageSelector';
-import { Thermometer, Droplets, Wind } from 'lucide-react';
+import { Thermometer, Droplets, Wind, Camera } from 'lucide-react';
 import { ENTITIES } from './types/entities';
 // Removed hardcoded targets - now using currentStage values from phenology
 
@@ -136,7 +135,16 @@ function Dashboard() {
             GrowOp Command Center • {currentStage?.emoji} {currentStage?.name || 'Loading...'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <a
+            href="https://my.wyze.com/live"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded-lg text-gray-200 text-sm font-medium transition-all duration-200 hover:shadow-lg"
+          >
+            <Camera className="w-4 h-4" />
+            <span>Live View</span>
+          </a>
           <AIReviewBadge 
             lastReview={lastReview}
             isReviewing={isReviewing}
@@ -321,11 +329,6 @@ function Dashboard() {
         <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-2 gap-6">
           <GrowLog />
           <LogHistory />
-        </div>
-
-        {/* Camera Feed */}
-        <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CameraFeed />
         </div>
       </div>
     </div>
