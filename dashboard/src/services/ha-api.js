@@ -129,35 +129,147 @@ export async function getVPDHistory(hours = 24, startDate = null, endDate = null
     getEntityHistory('sensor.ac_infinity_controller_69_pro_humidity', startTime, endTime),
   ]);
   
+  // Helper function to parse and validate sensor values
+  const parseSensorValue = (state, type) => {
+    // Filter out unavailable/unknown states
+    if (!state || state === 'unavailable' || state === 'unknown' || state === 'None') {
+      return null;
+    }
+    
+    const value = parseFloat(state);
+    
+    // Check for NaN or invalid numbers
+    if (isNaN(value) || !isFinite(value)) {
+      return null;
+    }
+    
+    // Validate based on sensor type
+    switch (type) {
+      case 'temperature':
+        // Temperature should be between -40°F (extreme cold) and 150°F (extreme hot)
+        // Values outside this range are likely sensor errors or unplugging
+        if (value < -40 || value > 150) {
+          return null;
+        }
+        return value;
+        
+      case 'vpd':
+        // VPD should be between 0 and 5 kPa (reasonable range for grow environments)
+        // Negative values or extremely high values indicate sensor errors
+        if (value < 0 || value > 5) {
+          return null;
+        }
+        return value;
+        
+      case 'humidity':
+        // Humidity should be between 0% and 100%
+        if (value < 0 || value > 100) {
+          return null;
+        }
+        return value;
+        
+      default:
+        return value;
+    }
+  };
+  
   // Merge and format for Recharts
   const dataMap = new Map();
   
   vpdHistory.forEach(point => {
     const time = new Date(point.last_changed).getTime();
-    dataMap.set(time, { 
-      time, 
-      timestamp: point.last_changed,
-      vpd: parseFloat(point.state) || null 
-    });
+    const vpdValue = parseSensorValue(point.state, 'vpd');
+    if (vpdValue !== null) {
+      dataMap.set(time, { 
+        time, 
+        timestamp: point.last_changed,
+        vpd: vpdValue
+      });
+    }
   });
   
   tempHistory.forEach(point => {
     const time = new Date(point.last_changed).getTime();
-    const existing = dataMap.get(time) || { time, timestamp: point.last_changed };
-    existing.temperature = parseFloat(point.state) || null;
-    dataMap.set(time, existing);
+    const tempValue = parseSensorValue(point.state, 'temperature');
+    if (tempValue !== null) {
+      const existing = dataMap.get(time) || { time, timestamp: point.last_changed };
+      existing.temperature = tempValue;
+      dataMap.set(time, existing);
+    }
   });
   
   humidHistory.forEach(point => {
     const time = new Date(point.last_changed).getTime();
-    const existing = dataMap.get(time) || { time, timestamp: point.last_changed };
-    existing.humidity = parseFloat(point.state) || null;
-    dataMap.set(time, existing);
+    const humidValue = parseSensorValue(point.state, 'humidity');
+    if (humidValue !== null) {
+      const existing = dataMap.get(time) || { time, timestamp: point.last_changed };
+      existing.humidity = humidValue;
+      dataMap.set(time, existing);
+    }
   });
   
-  return Array.from(dataMap.values())
-    .sort((a, b) => a.time - b.time)
-    .filter(point => point.vpd !== null || point.temperature !== null || point.humidity !== null);
+  // Convert to array and sort by time
+  const sortedData = Array.from(dataMap.values())
+    .sort((a, b) => a.time - b.time);
+  
+  // Additional filtering: Detect and remove sensor unplugging artifacts
+  // Look for sudden drops followed by recovery (indicates brief unplugging)
+  const filteredData = sortedData.filter((point, index) => {
+    // Keep first and last points
+    if (index === 0 || index === sortedData.length - 1) {
+      return true;
+    }
+    
+    const prev = sortedData[index - 1];
+    const next = sortedData[index + 1];
+    const timeDiff = (next.time - prev.time) / 1000 / 60; // minutes
+    
+    // Check for temperature anomalies (sensor unplugging pattern)
+    if (point.temperature !== null && prev.temperature !== null && next.temperature !== null) {
+      const tempDrop = prev.temperature - point.temperature;
+      const tempRecovery = next.temperature - point.temperature;
+      const tempDiff = Math.abs(next.temperature - prev.temperature);
+      
+      // Pattern: Sudden drop (>20°F) followed by recovery within 5 minutes
+      // AND next value is close to previous value (sensor reconnected)
+      if (tempDrop > 20 && tempRecovery > 15 && timeDiff < 5 && tempDiff < 10) {
+        return false; // Filter out this anomalous point
+      }
+    }
+    
+    // Check for VPD anomalies (sensor unplugging pattern)
+    if (point.vpd !== null && prev.vpd !== null && next.vpd !== null) {
+      const vpdDrop = prev.vpd - point.vpd;
+      const vpdRecovery = next.vpd - point.vpd;
+      const vpdDiff = Math.abs(next.vpd - prev.vpd);
+      
+      // Pattern: Sudden drop (>1 kPa) followed by recovery within 5 minutes
+      // AND next value is close to previous value (sensor reconnected)
+      if (vpdDrop > 1 && vpdRecovery > 0.8 && timeDiff < 5 && vpdDiff < 0.5) {
+        return false; // Filter out this anomalous point
+      }
+    }
+    
+    // Check for humidity anomalies (sensor unplugging pattern)
+    if (point.humidity !== null && prev.humidity !== null && next.humidity !== null) {
+      const humidDrop = prev.humidity - point.humidity;
+      const humidRecovery = next.humidity - point.humidity;
+      const humidDiff = Math.abs(next.humidity - prev.humidity);
+      
+      // Pattern: Sudden drop (>30%) followed by recovery within 5 minutes
+      // AND next value is close to previous value (sensor reconnected)
+      if (humidDrop > 30 && humidRecovery > 25 && timeDiff < 5 && humidDiff < 15) {
+        return false; // Filter out this anomalous point
+      }
+    }
+    
+    return true;
+  });
+  
+  // Final filter: only keep points with at least one valid sensor reading
+  return filteredData.filter(point => 
+    point.vpd !== null || point.temperature !== null || point.humidity !== null
+  );
 }
 
 /**

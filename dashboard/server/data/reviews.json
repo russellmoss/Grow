@@ -1,0 +1,101 @@
+[
+  {
+    "timestamp": "2026-01-20T00:12:10.253Z",
+    "durationMs": 17422,
+    "analysis": {
+      "overnightSummary": "VPD averaged 1.53 kPa, nearly triple the 0.6 kPa seedling target, with only 3% time in optimal range. Environment shows classic dry basement pattern with VPD dropping overnight as humidity rises, then spiking during day cycle.",
+      "issuesDetected": [
+        "VPD consistently too high (avg 1.53 vs target 0.6)",
+        "Humidifier settings completely misaligned - targeting 0.9 kPa when seedlings need 0.6 kPa",
+        "Wide VPD swings from 0.36 to 2.69 kPa indicating poor stability",
+        "Day cycle showing severe drying (2.0+ kPa) likely from lights"
+      ],
+      "positives": [
+        "Humidifier did achieve brief periods in target range (10:00-10:30 AM)",
+        "Temperature relatively stable around target 78-79°F",
+        "System is responsive to environmental changes"
+      ],
+      "vpdAssessment": "too_high",
+      "stabilityScore": 2
+    },
+    "actionsExecuted": [
+      {
+        "entity": "number.cloudforge_t5_target_vpd",
+        "currentValue": 0.9,
+        "newValue": 0.6,
+        "reason": "Change of 0.30 kPa exceeds max allowed 0.15 kPa per day",
+        "executed": false,
+        "blocked": true,
+        "timestamp": "2026-01-20T00:12:10.253Z"
+      },
+      {
+        "entity": "number.cloudforge_t5_vpd_high_trigger",
+        "currentValue": 1.1,
+        "newValue": 0.8,
+        "reason": "Change of 0.30 kPa exceeds max allowed 0.15 kPa per day",
+        "executed": false,
+        "blocked": true,
+        "timestamp": "2026-01-20T00:12:10.253Z"
+      },
+      {
+        "entity": "number.cloudforge_t5_vpd_low_trigger",
+        "currentValue": 0.7,
+        "newValue": 0.4,
+        "reason": "Change of 0.30 kPa exceeds max allowed 0.1 kPa per day",
+        "executed": false,
+        "blocked": true,
+        "timestamp": "2026-01-20T00:12:10.253Z"
+      }
+    ],
+    "recommendations": [
+      {
+        "type": "heater",
+        "priority": "medium",
+        "suggestion": "Consider reducing heater target by 2-3°F during day cycle to help lower VPD while humidifier catches up",
+        "reason": "Lower temperature will reduce vapor pressure deficit while maintaining seedling-appropriate conditions"
+      }
+    ],
+    "predictions": {
+      "todayOutlook": "VPD should drop significantly with corrected humidifier targets - expect more time in 0.4-0.8 range, though may take 6-12 hours for full environmental response",
+      "potentialConcerns": [
+        "May initially overcorrect into too-low VPD as system adjusts",
+        "Watch for humidity spikes above 80% during adjustment period"
+      ]
+    },
+    "learnings": [
+      "This basement environment requires aggressive humidification settings due to extremely dry baseline conditions",
+      "Light cycle creates strong drying pressure requiring proactive humidity management",
+      "System was previously configured for mature plants (0.9 kPa) rather than seedling requirements"
+    ],
+    "stats": {
+      "avgVPD": "1.53",
+      "minVPD": "-327.68",
+      "maxVPD": "2.83",
+      "avgTemp": "78.9",
+      "minTemp": "-557.8",
+      "maxTemp": "85.4",
+      "avgHumidity": "59.3",
+      "minHumidity": "-327.7",
+      "maxHumidity": "98.8",
+      "timeInRange": 3,
+      "dataPoints": 6507
+    },
+    "apiUsage": {
+      "inputTokens": 2329,
+      "outputTokens": 796,
+      "estimatedCost": "0.0189"
+    }
+  },
+  {
+    "timestamp": "2026-01-20T00:11:13.102Z",
+    "durationMs": 1265,
+    "error": "Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted",
+    "failed": true
+  },
+  {
+    "timestamp": "2026-01-20T00:10:03.739Z",
+    "durationMs": 697,
+    "error": "Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted",
+    "failed": true
+  }
+]

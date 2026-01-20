@@ -2,8 +2,9 @@ import { HomeAssistantProvider, useHA } from './context/HomeAssistantContext';
 import { GrowLogProvider } from './context/GrowLogContext';
 import { PhenologyProvider, usePhenology } from './context/PhenologyContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { KPICard, ToggleSwitch, FanModeSelector, ScheduleSlider, SystemThinkingPanel, ManualControlPanel, AIAnalysisPanel } from './components';
+import { KPICard, ToggleSwitch, FanModeSelector, ScheduleSlider, SystemThinkingPanel, ManualControlPanel, AIAnalysisPanel, ControlArchitecturePanel, AIReviewBadge, AIReviewPanel } from './components';
 import { useEnvironmentController } from './hooks/useEnvironmentController';
+import { useAIReview } from './hooks/useAIReview';
 import { VPDHistoryChart } from './components/charts/VPDHistoryChart';
 import { ClimateHistoryChart } from './components/charts/ClimateHistoryChart';
 import { GrowLog } from './components/log/GrowLog';
@@ -11,6 +12,7 @@ import { LogHistory } from './components/log/LogHistory';
 import { CameraFeed } from './components/CameraFeed';
 import StageSelector from './components/StageSelector';
 import { Thermometer, Droplets, Wind } from 'lucide-react';
+import { ENTITIES } from './types/entities';
 // Removed hardcoded targets - now using currentStage values from phenology
 
 function Dashboard() {
@@ -26,6 +28,8 @@ function Dashboard() {
     fanPower,
     heaterAction,
     humidifierState,
+    humidifierMode,
+    entities,
     toggleSwitch,
     setFanMode,
     callService,
@@ -42,9 +46,30 @@ function Dashboard() {
     setEnabled,
     triggerNow,
     latestAction,
+    recommendations,
+    vpdSyncStatus,
+    controlStatus,
   } = useEnvironmentController({
     intervalMinutes: 5,
     enabled: true, // Start enabled by default
+  });
+
+  // AI Review hook
+  const {
+    lastReview,
+    isReviewing,
+    isAnalyzing,
+    onDemandResult,
+    error: aiError,
+    reviews,
+    triggerDailyReview,
+    requestAnalysis,
+    clearAnalysis,
+    hasReviewToday,
+  } = useAIReview({
+    phenologyStage: currentStage,
+    reviewHour: 5,
+    reviewMinute: 30,
   });
 
   // Determine if it's day or night based on light state
@@ -112,6 +137,12 @@ function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <AIReviewBadge 
+            lastReview={lastReview}
+            isReviewing={isReviewing}
+            hasReviewToday={hasReviewToday}
+            error={aiError}
+          />
           <span className={`w-3 h-3 rounded-full ${isConnected ? 'bg-optimal' : 'bg-critical'}`}></span>
           <span className="text-sm text-zinc-400">
             {isConnected ? 'Connected' : 'Disconnected'}
@@ -152,11 +183,26 @@ function Dashboard() {
             optimal={humidityTargets.optimal}
             icon={Droplets}
             precision={1}
-            statusIndicator={
-              humidifierState === 'on'
-                ? { text: 'humidifying', icon: '💧', color: 'text-blue-400' }
-                : null
-            }
+            statusIndicator={(() => {
+              // Check CloudForge status (running if mode is not 'Off')
+              const cloudForgeRunning = humidifierMode && humidifierMode !== 'Off';
+              
+              // Check Vicks status
+              const vicksState = entities[ENTITIES.VICKS_HUMIDIFIER]?.state;
+              const vicksRunning = vicksState === 'on';
+              
+              // Build array of active humidifiers
+              const activeHumidifiers = [];
+              if (cloudForgeRunning) {
+                activeHumidifiers.push({ text: 'Cloudforge', icon: '💧', color: 'text-blue-400' });
+              }
+              if (vicksRunning) {
+                activeHumidifiers.push({ text: 'Vicks', icon: '💧', color: 'text-blue-400' });
+              }
+              
+              // Return array if any are active, null otherwise
+              return activeHumidifiers.length > 0 ? activeHumidifiers : null;
+            })()}
           />
           <KPICard
             label="VPD"
@@ -186,6 +232,15 @@ function Dashboard() {
           />
         </div>
 
+        {/* Control Architecture Panel */}
+        <div className="lg:col-span-3 mb-8">
+                <ControlArchitecturePanel 
+                  recommendations={recommendations}
+                  controlStatus={controlStatus}
+                  vpdSyncStatus={vpdSyncStatus}
+                />
+        </div>
+
         {/* AI Analysis Panel */}
         <div className="lg:col-span-3 mb-8">
           <AIAnalysisPanel
@@ -205,6 +260,21 @@ function Dashboard() {
           />
         </div>
 
+        {/* AI Review Panel */}
+        <div className="lg:col-span-3 mb-8">
+          <AIReviewPanel
+            lastReview={lastReview}
+            isReviewing={isReviewing}
+            isAnalyzing={isAnalyzing}
+            onDemandResult={onDemandResult}
+            onTriggerReview={triggerDailyReview}
+            onRequestAnalysis={requestAnalysis}
+            onClearAnalysis={clearAnalysis}
+            error={aiError}
+            reviews={reviews}
+          />
+        </div>
+
         {/* Control Section */}
         <div className="lg:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Device Controls */}
@@ -215,6 +285,13 @@ function Dashboard() {
               isOn={lightState === 'on'}
               onToggle={() => toggleSwitch('switch.light')}
               disabled={!isConnected}
+            />
+            <ToggleSwitch
+              label="Vicks Humidifier"
+              isOn={entities[ENTITIES.VICKS_HUMIDIFIER]?.state === 'on'}
+              onToggle={() => toggleSwitch(ENTITIES.VICKS_HUMIDIFIER)}
+              disabled={!isConnected}
+              icon={Droplets}
             />
             <FanModeSelector
               currentMode={fanMode || 'Off'}
@@ -248,7 +325,7 @@ function Dashboard() {
 
         {/* Camera Feed */}
         <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CameraFeed streamUrl={import.meta.env.VITE_CAMERA_URL || null} />
+          <CameraFeed />
         </div>
       </div>
     </div>

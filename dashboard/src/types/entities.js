@@ -51,8 +51,9 @@ export const ENTITIES = {
   INTAKE_FAN: 'switch.intake_air',
   HEATER: 'climate.tent_heater',
   EXHAUST_FAN_MODE: 'select.exhaust_fan_active_mode',
-  HUMIDIFIER_MODE: 'select.cloudforge_t5_active_mode',  // CloudForge T5
+  HUMIDIFIER_MODE: 'select.cloudforge_t5_active_mode',  // CloudForge T5 (AC Infinity)
   HUMIDIFIER_ON_POWER: 'number.cloudforge_t5_on_power',  // CloudForge T5 intensity control (1-10)
+  VICKS_HUMIDIFIER: 'switch.third_reality_inc_3rsp02028bz',  // Vicks humidifier (Zigbee - no rate limits)
   
   // Exhaust Fan Power Control (for dynamic VPD management)
   EXHAUST_FAN_ON_POWER: 'number.exhaust_fan_on_power',
@@ -74,6 +75,19 @@ export const ENTITIES = {
   // Humidifier Status
   HUMIDIFIER_STATE: 'binary_sensor.cloudforge_t5_state',
   HUMIDIFIER_STATUS: 'binary_sensor.cloudforge_t5_status',
+  
+  // AC Infinity VPD Settings (Read-Only - NEW)
+  EXHAUST_FAN_VPD_SETTINGS_MODE: 'select.exhaust_fan_vpd_settings_mode',
+  CLOUDFORGE_T5_VPD_SETTINGS_MODE: 'select.cloudforge_t5_vpd_settings_mode',
+  EXHAUST_FAN_VPD_HIGH_TRIGGER: 'number.exhaust_fan_vpd_high_trigger',
+  EXHAUST_FAN_VPD_LOW_TRIGGER: 'number.exhaust_fan_vpd_low_trigger',
+  EXHAUST_FAN_TARGET_VPD: 'number.exhaust_fan_target_vpd',
+  CLOUDFORGE_T5_VPD_HIGH_TRIGGER: 'number.cloudforge_t5_vpd_high_trigger',
+  CLOUDFORGE_T5_VPD_LOW_TRIGGER: 'number.cloudforge_t5_vpd_low_trigger',
+  CLOUDFORGE_T5_TARGET_VPD: 'number.cloudforge_t5_target_vpd',
+  
+  // Camera
+  TENT_CAMERA: 'camera.grow_camera',  // Wyze camera HL_CAM4 via Generic Camera integration
 };
 
 // VPD Target zones by growth stage

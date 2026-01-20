@@ -8,3 +8,6 @@ export { ErrorBoundary } from './ErrorBoundary';
 export { SystemThinkingPanel } from './SystemThinkingPanel';
 export { ManualControlPanel } from './ManualControlPanel';
 export { AIAnalysisPanel } from './AIAnalysisPanel';
+export { ControlArchitecturePanel } from './ControlArchitecturePanel';
+export { AIReviewBadge } from './AIReviewBadge';
+export { AIReviewPanel } from './AIReviewPanel';

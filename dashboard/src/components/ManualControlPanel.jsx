@@ -35,17 +35,22 @@ export function ManualControlPanel({
         <div className="flex items-center gap-3">
           <div className={`w-3 h-3 rounded-full ${isEnabled ? 'bg-optimal animate-pulse' : 'bg-zinc-600'}`} />
           <span className="font-medium">
-            {isEnabled ? 'Active - Auto Mode' : 'Inactive - Manual Mode'}
+            {isEnabled ? 'Active - Heater Control' : 'Paused - Heater Control'}
           </span>
         </div>
         {isEnabled && (
-          <p className="text-sm text-zinc-500 mt-2">
-            System is analyzing environment every 5 minutes and making automated adjustments.
-          </p>
+          <div className="mt-2 space-y-1">
+            <p className="text-sm text-zinc-400">
+              Dashboard controls heater temperature automatically.
+            </p>
+            <p className="text-xs text-zinc-500">
+              AC Infinity devices (humidifier, exhaust fan) are controlled by the AC Infinity app.
+            </p>
+          </div>
         )}
         {!isEnabled && (
           <p className="text-sm text-zinc-500 mt-2">
-            Controller is paused. Manual control of all devices is active.
+            Heater control is paused. Manual control is active.
           </p>
         )}
       </div>
@@ -65,12 +70,12 @@ export function ManualControlPanel({
             {isEnabled ? (
               <>
                 <StopCircle className="w-5 h-5" />
-                <span>Disable Auto Mode</span>
+                <span>Pause Heater Control</span>
               </>
             ) : (
               <>
                 <PlayCircle className="w-5 h-5" />
-                <span>Enable Auto Mode</span>
+                <span>Enable Heater Control</span>
               </>
             )}
           </div>
@@ -93,16 +98,14 @@ export function ManualControlPanel({
         </button>
       </div>
       
-      {/* Warning */}
-      {!isEnabled && (
-        <div className="mt-4 p-3 bg-caution/10 border border-caution/30 rounded-lg">
-          <p className="text-xs text-caution">
-            ⚠️ <strong>Warning:</strong> When auto mode is disabled, you are responsible 
-            for manually adjusting all environmental controls. VPD, temperature, and humidity 
-            targets will not be maintained automatically.
-          </p>
-        </div>
-      )}
+      {/* Hybrid Control Info */}
+      <div className="mt-4 p-3 bg-zinc-800/50 border border-zinc-700/50 rounded-lg">
+        <p className="text-xs text-zinc-400">
+          <strong className="text-zinc-300">Hybrid Control:</strong> Dashboard controls heater temperature. 
+          AC Infinity app controls humidifier and exhaust fan (VPD mode). 
+          See Control Architecture panel for recommendations.
+        </p>
+      </div>
     </div>
   );
 }

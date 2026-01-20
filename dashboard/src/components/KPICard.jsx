@@ -89,18 +89,37 @@ export function KPICard({
 
       {/* Value */}
       <div className="mb-4">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 flex-wrap">
           <span className={`sensor-value ${valueColors[status]}`}>
             {displayValue}
           </span>
           <span className="text-xl text-zinc-500">{unit}</span>
+          {/* Support both single indicator and array of indicators */}
           {statusIndicator && (
-            <span className={`text-sm flex items-center gap-1 ${
-              statusIndicator.color || 'text-zinc-400'
-            }`}>
-              {statusIndicator.icon && <span>{statusIndicator.icon}</span>}
-              <span>{statusIndicator.text}</span>
-            </span>
+            Array.isArray(statusIndicator) ? (
+              // Multiple indicators (e.g., multiple humidifiers)
+              <div className="flex items-center gap-2 flex-wrap">
+                {statusIndicator.map((indicator, idx) => (
+                  <span 
+                    key={idx}
+                    className={`text-sm flex items-center gap-1 ${
+                      indicator.color || 'text-zinc-400'
+                    }`}
+                  >
+                    {indicator.icon && <span>{indicator.icon}</span>}
+                    <span>{indicator.text}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              // Single indicator
+              <span className={`text-sm flex items-center gap-1 ${
+                statusIndicator.color || 'text-zinc-400'
+              }`}>
+                {statusIndicator.icon && <span>{statusIndicator.icon}</span>}
+                <span>{statusIndicator.text}</span>
+              </span>
+            )
           )}
         </div>
       </div>

@@ -16,13 +16,21 @@ import { ENTITIES } from '../types/entities.js';
 
 /**
  * Device cooldowns (ms) - AC Infinity devices have aggressive rate limiting
+ * AC Infinity cloud API has ~3-5 minute rate limits per device
  */
 const DEVICE_COOLDOWNS = {
-  humidifier: 120000,   // 2 minutes - AC Infinity rate limits aggressively
-  exhaustFan: 60000,    // 1 minute
-  heater: 30000,        // 30 seconds
-  light: 10000,         // 10 seconds
+  humidifier: 300000,   // 5 minutes - AC Infinity rate limit safe
+  exhaustFan: 300000,   // 5 minutes - AC Infinity rate limit safe
+  heater: 60000,        // 1 minute - Not AC Infinity, can be faster
+  light: 10000,         // 10 seconds - Zigbee, very fast
+  vicksHumidifier: 30000, // 30 seconds - Zigbee, no rate limits but avoid rapid toggling
 };
+
+/**
+ * AC Infinity devices that share the same rate limit pool
+ */
+const AC_INFINITY_DEVICES = ['humidifier', 'exhaustFan'];
+const AC_INFINITY_GLOBAL_COOLDOWN = 120000; // 2 minutes between ANY AC Infinity calls
 
 /**
  * Problem severity score (0-100)
@@ -147,7 +155,7 @@ export class EnvironmentController {
 
   /**
    * Analyze current state vs targets
-   * Returns priority-ordered list of problems
+   * Returns priority-ordered list of problems with control assignment
    * 
    * @returns {Array<Object>} List of problems, sorted by severity
    */
@@ -155,6 +163,7 @@ export class EnvironmentController {
     const problems = [];
     
     // Check VPD (highest priority for plant health)
+    // VPD is controlled by AC Infinity app (humidifier + exhaust fan)
     if (this.current.vpd > this.target.vpdMax) {
       problems.push({
         type: 'VPD_HIGH',
@@ -163,6 +172,7 @@ export class EnvironmentController {
         targetValue: this.target.vpdOptimal,
         delta: this.current.vpd - this.target.vpdMax,
         description: `VPD too high (${this.current.vpd.toFixed(2)} kPa) - Air is too dry`,
+        controlledBy: 'AC_INFINITY', // AC Infinity app controls VPD
       });
     } else if (this.current.vpd < this.target.vpdMin) {
       problems.push({
@@ -172,10 +182,12 @@ export class EnvironmentController {
         targetValue: this.target.vpdOptimal,
         delta: this.target.vpdMin - this.current.vpd,
         description: `VPD too low (${this.current.vpd.toFixed(2)} kPa) - Air is too humid`,
+        controlledBy: 'AC_INFINITY', // AC Infinity app controls VPD
       });
     }
     
     // Check temperature
+    // Temperature is controlled by Dashboard (heater)
     if (this.current.temp > this.target.tempMax) {
       problems.push({
         type: 'TEMP_HIGH',
@@ -184,6 +196,7 @@ export class EnvironmentController {
         targetValue: this.target.tempOptimal,
         delta: this.current.temp - this.target.tempMax,
         description: `Temperature too high (${this.current.temp.toFixed(1)}°F)`,
+        controlledBy: 'DASHBOARD', // Dashboard controls heater
       });
     } else if (this.current.temp < this.target.tempMin) {
       problems.push({
@@ -193,10 +206,12 @@ export class EnvironmentController {
         targetValue: this.target.tempOptimal,
         delta: this.target.tempMin - this.current.temp,
         description: `Temperature too low (${this.current.temp.toFixed(1)}°F)`,
+        controlledBy: 'DASHBOARD', // Dashboard controls heater
       });
     }
     
     // Check humidity
+    // Humidity is controlled by AC Infinity app (humidifier)
     if (this.current.humidity < this.target.humidityMin) {
       problems.push({
         type: 'HUMIDITY_LOW',
@@ -205,6 +220,7 @@ export class EnvironmentController {
         targetValue: this.target.humidityOptimal,
         delta: this.target.humidityMin - this.current.humidity,
         description: `Humidity too low (${this.current.humidity.toFixed(1)}%)`,
+        controlledBy: 'AC_INFINITY', // AC Infinity app controls humidifier
       });
     } else if (this.current.humidity > this.target.humidityMax) {
       problems.push({
@@ -214,6 +230,7 @@ export class EnvironmentController {
         targetValue: this.target.humidityOptimal,
         delta: this.current.humidity - this.target.humidityMax,
         description: `Humidity too high (${this.current.humidity.toFixed(1)}%)`,
+        controlledBy: 'AC_INFINITY', // AC Infinity app controls humidifier
       });
     }
     
@@ -225,11 +242,16 @@ export class EnvironmentController {
    * Generate coordinated action plan to fix problems
    * Considers actuator interactions and prevents conflicts
    * 
+   * Hybrid Architecture:
+   * - DASHBOARD controls: Heater (temperature)
+   * - AC_INFINITY controls: Humidifier, Exhaust Fan (VPD/humidity)
+   * 
    * @param {Array<Object>} problems - List of problems from analyzeState()
-   * @returns {Array<Object>} List of actions to take
+   * @returns {Object} { actions: Array<Object>, recommendations: Array<Object> }
    */
   generateActionPlan(problems) {
-    const actions = [];
+    const actions = []; // Actions for dashboard-controlled devices (heater)
+    const recommendations = []; // Recommendations for AC Infinity-controlled devices
     
     // Process each problem in priority order
     for (const problem of problems) {
@@ -237,28 +259,51 @@ export class EnvironmentController {
         case 'VPD_HIGH': {
           // VPD too high = air too dry
           // Root causes: low humidity OR high temperature
+          // VPD is controlled by AC Infinity app
           
           if (this.current.humidity < this.target.humidityOptimal) {
-            // Problem is primarily low humidity - use MAX intensity (10)
+            // Problem is primarily low humidity - recommend AC Infinity adjustment
             const currentIntensity = this.actuators.humidifier?.currentPower || 0;
             const currentMode = this.actuators.humidifier?.mode;
+            // CloudForge is at max if: (On mode AND intensity >= 10) OR (VPD mode AND intensity >= 10)
+            const cloudForgeAtMax = (currentMode === 'On' || currentMode === 'VPD') && currentIntensity >= 10;
             
-            // Skip if already at max intensity and ON
-            if (currentMode === 'On' && currentIntensity === 10) {
-              console.log('[ENV-CTRL] Humidifier already at max (10), skipping');
-            } else {
-              actions.push({
+            if (currentMode !== 'On' && currentMode !== 'VPD') {
+              recommendations.push({
                 device: 'humidifier',
-                action: 'set_max_intensity',
-                targetIntensity: 10,
-                currentIntensity: currentIntensity,
-                currentMode: currentMode,
-                reason: `Set humidifier to MAX (humidity ${this.current.humidity.toFixed(1)}%, VPD ${this.current.vpd.toFixed(2)} kPa)`,
+                type: 'VPD_HIGH',
+                severity: problem.severity,
+                action: 'set_vpd_mode',
+                currentValue: currentMode,
+                recommendedValue: 'VPD',
+                reason: `VPD is too high (${this.current.vpd.toFixed(2)} kPa). Set CloudForge to VPD mode in AC Infinity app.`,
+                priority: 1,
+              });
+            } else if (currentIntensity < 10) {
+              recommendations.push({
+                device: 'humidifier',
+                type: 'VPD_HIGH',
+                severity: problem.severity,
+                action: 'increase_intensity',
+                currentValue: currentIntensity,
+                recommendedValue: 10,
+                reason: `VPD is too high (${this.current.vpd.toFixed(2)} kPa). Increase humidifier intensity to maximum (10) to add moisture.`,
                 priority: 1,
               });
             }
             
-            // Calculate optimal fan power (will reduce if too high, but maintain minimum for air exchange)
+            // Vicks Bridge Logic: Turn ON if CloudForge at max AND humidity still low
+            const vicksState = this.actuators.vicksHumidifier?.state || 'off';
+            if (cloudForgeAtMax && vicksState === 'off' && this.current.humidity < this.target.humidityMin) {
+              actions.push({
+                device: 'vicksHumidifier',
+                action: 'turn_on',
+                reason: `VPD high (${this.current.vpd.toFixed(2)} kPa) and humidity low (${this.current.humidity.toFixed(1)}%). CloudForge at max (10). Activating Vicks humidifier bridge for additional capacity.`,
+                priority: 1,
+              });
+            }
+            
+            // Calculate optimal fan power
             const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
             const optimalFanPower = calculateOptimalFanPower({
               currentVPD: this.current.vpd,
@@ -271,17 +316,19 @@ export class EnvironmentController {
             });
             
             if (optimalFanPower !== currentFanPower) {
-              actions.push({
+              recommendations.push({
                 device: 'exhaustFan',
+                type: 'VPD_HIGH',
+                severity: problem.severity,
                 action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
-                toPower: optimalFanPower,
-                fromPower: currentFanPower,
-                reason: `Adjust fan to ${optimalFanPower} to retain moisture (VPD: ${this.current.vpd.toFixed(2)}→${this.target.vpdOptimal.toFixed(2)} kPa)`,
+                currentValue: currentFanPower,
+                recommendedValue: optimalFanPower,
+                reason: `Reduce exhaust fan power to ${optimalFanPower} to retain moisture (VPD: ${this.current.vpd.toFixed(2)}→${this.target.vpdOptimal.toFixed(2)} kPa)`,
                 priority: 2,
               });
             }
           } else if (this.current.temp > this.target.tempOptimal) {
-            // Problem is primarily high temperature
+            // Problem is primarily high temperature - Dashboard can control heater
             actions.push({
               device: 'heater',
               action: 'reduce_temp',
@@ -297,19 +344,35 @@ export class EnvironmentController {
         case 'VPD_LOW': {
           // VPD too low = air too humid
           // Solutions: increase exhaust, reduce humidifier, increase temp
+          // VPD is controlled by AC Infinity app
           
-          // Only add turn_off action if not already off
-          const vpdLowCurrentMode = this.actuators.humidifier?.mode;
-          if (vpdLowCurrentMode !== 'Off') {
+          // Turn OFF Vicks if it's on (VPD too low means too much humidity)
+          const vicksState = this.actuators.vicksHumidifier?.state || 'off';
+          if (vicksState === 'on') {
             actions.push({
-              device: 'humidifier',
+              device: 'vicksHumidifier',
               action: 'turn_off',
-              reason: 'Stop adding moisture (VPD too low)',
+              reason: `VPD too low (${this.current.vpd.toFixed(2)} kPa). Turning off Vicks humidifier to reduce moisture.`,
               priority: 1,
             });
           }
           
-          // Calculate optimal fan power based on conditions
+          // Recommend turning off humidifier
+          const vpdLowCurrentMode = this.actuators.humidifier?.mode;
+          if (vpdLowCurrentMode !== 'Off') {
+            recommendations.push({
+              device: 'humidifier',
+              type: 'VPD_LOW',
+              severity: problem.severity,
+              action: 'turn_off',
+              currentValue: vpdLowCurrentMode,
+              recommendedValue: 'Off',
+              reason: `VPD is too low (${this.current.vpd.toFixed(2)} kPa). Turn off humidifier to stop adding moisture.`,
+              priority: 1,
+            });
+          }
+          
+          // Calculate optimal fan power
           const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
           const optimalFanPower = calculateOptimalFanPower({
             currentVPD: this.current.vpd,
@@ -322,12 +385,14 @@ export class EnvironmentController {
           });
           
           if (optimalFanPower !== currentFanPower) {
-            actions.push({
+            recommendations.push({
               device: 'exhaustFan',
+              type: 'VPD_LOW',
+              severity: problem.severity,
               action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
-              toPower: optimalFanPower,
-              fromPower: currentFanPower,
-              reason: `Adjust fan to ${optimalFanPower} (VPD: ${this.current.vpd.toFixed(2)}→${this.target.vpdOptimal.toFixed(2)} kPa, Humidity: ${this.current.humidity.toFixed(1)}%)`,
+              currentValue: currentFanPower,
+              recommendedValue: optimalFanPower,
+              reason: `Adjust exhaust fan to ${optimalFanPower} to remove excess moisture (VPD: ${this.current.vpd.toFixed(2)}→${this.target.vpdOptimal.toFixed(2)} kPa, Humidity: ${this.current.humidity.toFixed(1)}%)`,
               priority: 2,
             });
           }
@@ -336,8 +401,9 @@ export class EnvironmentController {
           
         case 'TEMP_HIGH': {
           // Temperature too high
+          // Dashboard controls heater directly
           
-          // Calculate optimal fan power (will consider VPD constraints)
+          // Calculate optimal fan power (for recommendation if VPD allows)
           const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
           const optimalFanPower = calculateOptimalFanPower({
             currentVPD: this.current.vpd,
@@ -349,25 +415,28 @@ export class EnvironmentController {
             currentFanPower: currentFanPower,
           });
           
-          if (optimalFanPower !== currentFanPower) {
-            actions.push({
+          if (optimalFanPower !== currentFanPower && this.current.vpd < this.target.vpdMax) {
+            // VPD allows fan increase - recommend it
+            recommendations.push({
               device: 'exhaustFan',
-              action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
-              toPower: optimalFanPower,
-              fromPower: currentFanPower,
-              reason: `Adjust fan to ${optimalFanPower} for cooling (VPD: ${this.current.vpd.toFixed(2)} kPa, Temp: ${this.current.temp.toFixed(1)}°F)`,
-              priority: 1,
-            });
-          } else {
-            // Can't increase exhaust (would worsen VPD)
-            actions.push({
-              device: 'heater',
-              action: 'reduce_temp',
-              toTemp: this.target.tempOptimal,
-              reason: 'Direct temperature reduction (can\'t increase exhaust due to VPD)',
-              priority: 1,
+              type: 'TEMP_HIGH',
+              severity: problem.severity,
+              action: 'increase_power',
+              currentValue: currentFanPower,
+              recommendedValue: optimalFanPower,
+              reason: `Temperature is high (${this.current.temp.toFixed(1)}°F). Increase exhaust fan to ${optimalFanPower} for cooling (VPD allows: ${this.current.vpd.toFixed(2)} kPa)`,
+              priority: 2,
             });
           }
+          
+          // Dashboard can directly reduce heater temperature
+          actions.push({
+            device: 'heater',
+            action: 'reduce_temp',
+            toTemp: this.target.tempOptimal,
+            reason: `Reduce heater setpoint to ${this.target.tempOptimal}°F (currently ${this.current.temp.toFixed(1)}°F)`,
+            priority: 1,
+          });
           break;
         }
           
@@ -384,26 +453,48 @@ export class EnvironmentController {
         }
           
         case 'HUMIDITY_LOW': {
-          // Humidity too low - use MAX intensity (10)
+          // Humidity too low - recommend AC Infinity adjustment
           const currentIntensity = this.actuators.humidifier?.currentPower || 0;
           const currentMode = this.actuators.humidifier?.mode;
+          // CloudForge is at max if: (On mode AND intensity >= 10) OR (VPD mode AND intensity >= 10)
+          const cloudForgeAtMax = (currentMode === 'On' || currentMode === 'VPD') && currentIntensity >= 10;
           
-          // Skip if already at max intensity and ON
-          if (currentMode === 'On' && currentIntensity === 10) {
-            console.log('[ENV-CTRL] Humidifier already at max (10), skipping');
-          } else {
-            actions.push({
+          if (currentMode !== 'On' && currentMode !== 'VPD') {
+            recommendations.push({
               device: 'humidifier',
-              action: 'set_max_intensity',
-              targetIntensity: 10,
-              currentIntensity: currentIntensity,
-              currentMode: currentMode,
-              reason: `Set humidifier to MAX (humidity ${this.current.humidity.toFixed(1)}%)`,
+              type: 'HUMIDITY_LOW',
+              severity: problem.severity,
+              action: 'set_vpd_mode',
+              currentValue: currentMode,
+              recommendedValue: 'VPD',
+              reason: `Humidity is too low (${this.current.humidity.toFixed(1)}%). Set CloudForge to VPD mode in AC Infinity app.`,
+              priority: 1,
+            });
+          } else if (currentIntensity < 10) {
+            recommendations.push({
+              device: 'humidifier',
+              type: 'HUMIDITY_LOW',
+              severity: problem.severity,
+              action: 'increase_intensity',
+              currentValue: currentIntensity,
+              recommendedValue: 10,
+              reason: `Humidity is too low (${this.current.humidity.toFixed(1)}%). Increase humidifier intensity to maximum (10) in AC Infinity app.`,
               priority: 1,
             });
           }
           
-          // Calculate optimal fan power to balance moisture retention
+          // Vicks Bridge Logic: Turn ON if CloudForge at max AND humidity still low
+          const vicksState = this.actuators.vicksHumidifier?.state || 'off';
+          if (cloudForgeAtMax && vicksState === 'off' && this.current.humidity < this.target.humidityMin) {
+            actions.push({
+              device: 'vicksHumidifier',
+              action: 'turn_on',
+              reason: `Humidity low (${this.current.humidity.toFixed(1)}%, target ${this.target.humidityOptimal}%). CloudForge at max (10). Activating Vicks humidifier bridge for additional capacity.`,
+              priority: 1,
+            });
+          }
+          
+          // Calculate optimal fan power
           const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
           const optimalFanPower = calculateOptimalFanPower({
             currentVPD: this.current.vpd,
@@ -416,12 +507,14 @@ export class EnvironmentController {
           });
           
           if (optimalFanPower !== currentFanPower) {
-            actions.push({
+            recommendations.push({
               device: 'exhaustFan',
+              type: 'HUMIDITY_LOW',
+              severity: problem.severity,
               action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
-              toPower: optimalFanPower,
-              fromPower: currentFanPower,
-              reason: `Adjust fan to ${optimalFanPower} to balance moisture (VPD: ${this.current.vpd.toFixed(2)} kPa, Humidity: ${this.current.humidity.toFixed(1)}%)`,
+              currentValue: currentFanPower,
+              recommendedValue: optimalFanPower,
+              reason: `Adjust exhaust fan to ${optimalFanPower} to balance moisture retention (VPD: ${this.current.vpd.toFixed(2)} kPa, Humidity: ${this.current.humidity.toFixed(1)}%)`,
               priority: 2,
             });
           }
@@ -429,21 +522,40 @@ export class EnvironmentController {
         }
           
         case 'HUMIDITY_HIGH': {
-          // Humidity too high - turn OFF (only if way too high, +10% over max)
+          // Humidity too high - recommend AC Infinity adjustment
+          // Vicks is a VPD bridge, so only turn it off if VPD is also low (too much moisture overall)
+          // Don't turn off Vicks based on humidity alone - VPD is the primary metric
+          const vicksState = this.actuators.vicksHumidifier?.state || 'off';
+          const vpdTooLow = this.current.vpd < this.target.vpdMin;
+          
+          if (vicksState === 'on' && vpdTooLow) {
+            // Only turn off Vicks if VPD is too low (indicates too much moisture overall)
+            // This means both humidity AND VPD indicate excess moisture
+            actions.push({
+              device: 'vicksHumidifier',
+              action: 'turn_off',
+              reason: `VPD too low (${this.current.vpd.toFixed(2)} kPa) and humidity high (${this.current.humidity.toFixed(1)}%). Turning off Vicks humidifier to reduce moisture.`,
+              priority: 1,
+            });
+          }
+          
           if (this.current.humidity > this.target.humidityMax + 10) {
-            // Only add turn_off action if not already off
             const humidityHighCurrentMode = this.actuators.humidifier?.mode;
             if (humidityHighCurrentMode !== 'Off') {
-              actions.push({
+              recommendations.push({
                 device: 'humidifier',
+                type: 'HUMIDITY_HIGH',
+                severity: problem.severity,
                 action: 'turn_off',
-                reason: `Humidity ${this.current.humidity.toFixed(1)}% exceeds max by 10%+`,
+                currentValue: humidityHighCurrentMode,
+                recommendedValue: 'Off',
+                reason: `Humidity ${this.current.humidity.toFixed(1)}% exceeds max by 10%+. Turn off humidifier in AC Infinity app.`,
                 priority: 1,
               });
             }
           }
           
-          // Calculate optimal fan power to remove excess moisture
+          // Calculate optimal fan power
           const currentFanPower = this.actuators.exhaustFan?.currentPower || 2;
           const optimalFanPower = calculateOptimalFanPower({
             currentVPD: this.current.vpd,
@@ -456,12 +568,14 @@ export class EnvironmentController {
           });
           
           if (optimalFanPower !== currentFanPower) {
-            actions.push({
+            recommendations.push({
               device: 'exhaustFan',
+              type: 'HUMIDITY_HIGH',
+              severity: problem.severity,
               action: optimalFanPower > currentFanPower ? 'increase_power' : 'reduce_power',
-              toPower: optimalFanPower,
-              fromPower: currentFanPower,
-              reason: `Adjust fan to ${optimalFanPower} to remove excess moisture (Humidity: ${this.current.humidity.toFixed(1)}%, VPD: ${this.current.vpd.toFixed(2)} kPa)`,
+              currentValue: currentFanPower,
+              recommendedValue: optimalFanPower,
+              reason: `Adjust exhaust fan to ${optimalFanPower} to remove excess moisture (Humidity: ${this.current.humidity.toFixed(1)}%, VPD: ${this.current.vpd.toFixed(2)} kPa)`,
               priority: 2,
             });
           }
@@ -471,7 +585,37 @@ export class EnvironmentController {
     }
     
     // Remove duplicate actions (keep highest priority)
-    return this._deduplicateActions(actions);
+    const deduplicatedActions = this._deduplicateActions(actions);
+    const deduplicatedRecommendations = this._deduplicateActions(recommendations);
+    
+    // Additional logic: Turn OFF Vicks if VPD reaches optimal range (even if no problem detected)
+    // Vicks is a VPD bridge - primary control should be based on VPD, not humidity
+    // This ensures Vicks turns off when VPD conditions improve
+    // BUT: Only if VPD is well within optimal range (not just barely in range) to respect manual control
+    const vicksState = this.actuators.vicksHumidifier?.state || 'off';
+    if (vicksState === 'on') {
+      // Check if VPD is well within optimal range
+      const vpdInRange = this.current.vpd >= this.target.vpdMin && this.current.vpd <= this.target.vpdMax;
+      const vpdNearOptimal = Math.abs(this.current.vpd - this.target.vpdOptimal) <= 0.15; // Within 0.15 kPa of optimal (tighter than before)
+      
+      // Only auto-turn-off if VPD is well within optimal range
+      // This respects manual control - if user turned it on, don't immediately turn it off
+      // We focus on VPD because that's what Vicks is helping with (VPD bridge)
+      if (vpdInRange && vpdNearOptimal) {
+        // VPD is well within optimal range - turn off Vicks to let CloudForge handle it alone
+        deduplicatedActions.push({
+          device: 'vicksHumidifier',
+          action: 'turn_off',
+          reason: `VPD (${this.current.vpd.toFixed(2)} kPa) is well within optimal range. Turning off Vicks humidifier bridge.`,
+          priority: 2,
+        });
+      }
+    }
+    
+    return {
+      actions: deduplicatedActions,
+      recommendations: deduplicatedRecommendations,
+    };
   }
 
   /**
@@ -520,58 +664,75 @@ export class EnvironmentController {
    * @returns {Promise<Array<Object>>} Execution results
    */
   async executeActionPlan(actions, callService, getEntityState, cooldownRef = { current: {} }) {
+    // SAFETY: Block all AC Infinity device calls
+    const AC_INFINITY_DEVICES = ['humidifier', 'exhaustFan'];
+    const blockedActions = actions.filter(a => AC_INFINITY_DEVICES.includes(a.device));
+    
+    if (blockedActions.length > 0) {
+      console.warn('[ENV-CTRL] BLOCKED: AC Infinity device calls disabled. Use AC Infinity app directly.');
+      console.warn('[ENV-CTRL] Blocked actions:', blockedActions.map(a => `${a.device}: ${a.action}`));
+      return blockedActions.map(a => ({
+        action: a,
+        success: false,
+        skipped: true,
+        error: 'AC Infinity control disabled - use app directly'
+      }));
+    }
+    
     const results = [];
     const SERVICE_CALL_COOLDOWN = 30000; // 30 seconds between same calls (fallback)
     
     for (const action of actions) {
+      // GLOBAL AC INFINITY COOLDOWN - only one AC Infinity call per cycle
+      // This prevents multiple AC Infinity devices from being called in the same cycle
+      if (AC_INFINITY_DEVICES.includes(action.device)) {
+        const lastACCall = cooldownRef.current['_ac_infinity_global'];
+        if (lastACCall && Date.now() - lastACCall < AC_INFINITY_GLOBAL_COOLDOWN) {
+          const remaining = Math.round((AC_INFINITY_GLOBAL_COOLDOWN - (Date.now() - lastACCall)) / 1000);
+          console.log(`[ENV-CTRL] Skipping ${action.device} ${action.action} - global AC Infinity cooldown (${remaining}s remaining)`);
+          results.push({
+            action,
+            success: false,
+            skipped: true,
+            error: `AC Infinity global cooldown active (${remaining}s remaining)`,
+          });
+          continue;
+        }
+      }
+      
       // Check cooldown before executing
       // Use device-specific cooldown (longer for AC Infinity devices)
       const actionKey = `${action.device}_${action.action}`;
       
-      // Special handling for humidifier intensity changes
+      // Check device-specific cooldown (with support for extended durations from rate limit errors)
+      const extendedDuration = cooldownRef.current[`${actionKey}_duration`];
+      const cooldownDuration = extendedDuration || DEVICE_COOLDOWNS[action.device] || SERVICE_CALL_COOLDOWN;
+      const lastCall = cooldownRef.current[actionKey];
+      
+      if (lastCall && Date.now() - lastCall < cooldownDuration) {
+        const remaining = Math.round((cooldownDuration - (Date.now() - lastCall)) / 1000);
+        console.log(`[ENV-CTRL] Skipping ${actionKey} - cooldown active (${remaining}s remaining)`);
+        results.push({
+          action,
+          success: false,
+          error: 'Cooldown active - too soon since last call',
+          skipped: true,
+        });
+        continue;
+      }
+      
+      // Special handling for humidifier intensity (now simplified to just On/Off)
       if (action.device === 'humidifier' && action.action === 'set_max_intensity') {
-        // Check both the action-specific cooldown and the general intensity cooldown
-        const intensityCooldown = cooldownRef.current['humidifier_intensity'];
-        const actionCooldown = cooldownRef.current[actionKey];
-        
-        // Use the longer of the two cooldowns (intensity cooldown can be extended to 30 min on rate limit)
-        if (intensityCooldown && intensityCooldown > Date.now()) {
-          const remaining = Math.round((intensityCooldown - Date.now()) / 1000);
+        // Check if there's an extended intensity cooldown from previous rate limit
+        const intensityLastCall = cooldownRef.current['humidifier_intensity'];
+        const intensityDuration = cooldownRef.current['humidifier_intensity_duration'] || (5 * 60 * 1000);
+        if (intensityLastCall && Date.now() - intensityLastCall < intensityDuration) {
+          const remaining = Math.round((intensityDuration - (Date.now() - intensityLastCall)) / 1000);
           console.log(`[ENV-CTRL] Skipping ${actionKey} - intensity cooldown active (${remaining}s remaining)`);
           results.push({
             action,
             success: false,
             error: 'Intensity cooldown active - too soon since last call',
-            skipped: true,
-          });
-          continue;
-        }
-        
-        if (actionCooldown) {
-          const cooldownDuration = 5 * 60 * 1000; // 5 minutes for normal intensity changes
-          if (Date.now() - actionCooldown < cooldownDuration) {
-            const remaining = Math.round((cooldownDuration - (Date.now() - actionCooldown)) / 1000);
-            console.log(`[ENV-CTRL] Skipping ${actionKey} - cooldown active (${remaining}s remaining)`);
-            results.push({
-              action,
-              success: false,
-              error: 'Cooldown active - too soon since last call',
-              skipped: true,
-            });
-            continue;
-          }
-        }
-      } else {
-        // Normal cooldown check for other actions
-        const cooldownDuration = DEVICE_COOLDOWNS[action.device] || SERVICE_CALL_COOLDOWN;
-        const lastCall = cooldownRef.current[actionKey];
-        if (lastCall && Date.now() - lastCall < cooldownDuration) {
-          const remaining = Math.round((cooldownDuration - (Date.now() - lastCall)) / 1000);
-          console.log(`[ENV-CTRL] Skipping ${actionKey} - cooldown active (${remaining}s remaining)`);
-          results.push({
-            action,
-            success: false,
-            error: 'Cooldown active - too soon since last call',
             skipped: true,
           });
           continue;
@@ -586,102 +747,41 @@ export class EnvironmentController {
         
         switch (action.device) {
           case 'humidifier':
-            // Set max intensity (10) with fallback to On/Off
+            // SIMPLIFIED: Just turn On/Off - no intensity API calls
+            // AC Infinity devices can use their existing intensity setting
             if (action.action === 'set_max_intensity') {
-              // First, check current state BEFORE making any API calls
-              const currentIntensity = parseFloat(getEntityState?.(ENTITIES.HUMIDIFIER_ON_POWER) || 0);
+              // SIMPLIFIED: Just ensure it's ON, don't try to set intensity
+              // This reduces API calls from 2-4 down to just 1
               const currentMode = getEntityState?.(ENTITIES.HUMIDIFIER_MODE);
               
-              // If already at max intensity and ON, skip entirely (no API call needed)
-              if (currentMode === 'On' && currentIntensity === 10) {
-                console.log('[ENV-CTRL] Humidifier already at max intensity (10) and ON, skipping API call');
+              if (currentMode === 'On') {
+                console.log('[ENV-CTRL] Humidifier already ON, skipping API call');
                 results.push({
                   action,
                   success: true,
                   skipped: true,
-                  reason: 'Already at max intensity (10)',
+                  reason: 'Already ON (intensity will use existing setting)',
                 });
+                // Update global AC Infinity cooldown even on skip
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
+                }
                 continue;
               }
               
-              // If not at 10, try to set it
-              console.log(`[ENV-CTRL] Setting humidifier to MAX intensity (10)`);
-              console.log(`[ENV-CTRL] Current: mode=${currentMode}, intensity=${currentIntensity}`);
-              
-              // Try to set intensity to 10
-              serviceResult = await callService('number', 'set_value', {
-                entity_id: ENTITIES.HUMIDIFIER_ON_POWER,
-                value: 10,
+              // Not ON - just turn it ON (single API call)
+              console.log('[ENV-CTRL] Turning humidifier ON (simplified - no intensity call)');
+              serviceResult = await callService('select', 'select_option', {
+                entity_id: ENTITIES.HUMIDIFIER_MODE,
+                option: 'On',
               });
               
               if (serviceResult?.success) {
-                console.log('[ENV-CTRL] ✓ Humidifier set to intensity 10');
-                
-                // Also ensure it's ON (mode might be Off or Auto)
-                if (currentMode !== 'On') {
-                  console.log('[ENV-CTRL] Also setting mode to ON');
-                  const modeResult = await callService('select', 'select_option', {
-                    entity_id: ENTITIES.HUMIDIFIER_MODE,
-                    option: 'On',
-                  });
-                  if (modeResult?.success) {
-                    console.log('[ENV-CTRL] ✓ Humidifier mode set to ON');
-                  }
-                }
-                
-                // Set cooldown after successful intensity change (5 minutes)
+                console.log('[ENV-CTRL] ✓ Humidifier turned ON');
                 cooldownRef.current[actionKey] = Date.now();
-                cooldownRef.current['humidifier_intensity'] = Date.now();
-                console.log(`[ENV-CTRL] Humidifier cooldown set to 5 minutes after intensity change`);
-              } else {
-                // FALLBACK: If intensity control failed, check for rate limit
-                const errorCode = serviceResult?.errorCode;
-                const errorMsg = serviceResult?.error || '';
-                const isACInfinityError = errorCode === 100001 || 
-                                         errorCode === '100001' || 
-                                         (errorMsg.includes('code') && errorMsg.includes('100001')) ||
-                                         errorMsg.includes('Something went wrong');
-                
-                if (isACInfinityError) {
-                  console.log('[ENV-CTRL] AC Infinity rate limit (code 100001) - device is rate limited');
-                  
-                  // Check if it's already ON (even if not at intensity 10)
-                  const checkMode = getEntityState?.(ENTITIES.HUMIDIFIER_MODE);
-                  if (checkMode === 'On') {
-                    console.log('[ENV-CTRL] Humidifier is ON (intensity may not be 10 due to rate limit, but device is running)');
-                    console.log('[ENV-CTRL] Setting extended cooldown (30 min) to avoid repeated rate limit errors');
-                    serviceResult = { success: true, partial: true, reason: 'Already ON, intensity rate limited - will retry later' };
-                    
-                    // Set EXTENDED cooldown (30 minutes) for intensity changes when rate limited
-                    // This prevents constant retries that keep hitting rate limits
-                    const extendedCooldown = 30 * 60 * 1000; // 30 minutes
-                    cooldownRef.current[actionKey] = Date.now();
-                    cooldownRef.current['humidifier_intensity'] = Date.now() + extendedCooldown;
-                    console.log(`[ENV-CTRL] Extended cooldown set to 30 minutes to avoid rate limit`);
-                  } else {
-                    // Not ON - try simple ON command (less likely to be rate limited)
-                    console.log('[ENV-CTRL] Trying simple ON command (fallback, less likely to hit rate limit)');
-                    const fallbackResult = await callService('select', 'select_option', {
-                      entity_id: ENTITIES.HUMIDIFIER_MODE,
-                      option: 'On',
-                    });
-                    
-                    if (fallbackResult?.success) {
-                      console.log('[ENV-CTRL] ✓ Humidifier turned ON (fallback)');
-                      serviceResult = { success: true, partial: true, reason: 'Turned ON via fallback (intensity rate limited)' };
-                      cooldownRef.current[actionKey] = Date.now();
-                      // Still set extended cooldown for intensity changes
-                      cooldownRef.current['humidifier_intensity'] = Date.now() + (30 * 60 * 1000);
-                    } else {
-                      // Fallback also failed, keep original error
-                      console.warn('[ENV-CTRL] Fallback ON command also failed');
-                      // Set extended cooldown anyway to prevent rapid retries
-                      cooldownRef.current['humidifier_intensity'] = Date.now() + (30 * 60 * 1000);
-                    }
-                  }
-                } else {
-                  // Non-rate-limit error - set normal cooldown
-                  cooldownRef.current[actionKey] = Date.now();
+                // Update global AC Infinity cooldown
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
                 }
               }
             }
@@ -697,32 +797,25 @@ export class EnvironmentController {
                   skipped: true,
                   reason: 'Already On',
                 });
+                // Update global AC Infinity cooldown even on skip
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
+                }
                 continue;
               }
               
-              // Not already On - turn it on and set intensity to 10
-              console.log('[ENV-CTRL] Turning humidifier ON at max intensity');
-              
-              // First set intensity (before turning on, so it's ready when it starts)
-              try {
-                const intensityResult = await callService('number', 'set_value', {
-                  entity_id: ENTITIES.HUMIDIFIER_ON_POWER,
-                  value: 10,
-                });
-                if (intensityResult?.success) {
-                  console.log('[ENV-CTRL] ✓ Intensity set to 10');
-                }
-              } catch (e) {
-                console.warn('[ENV-CTRL] Could not set intensity, continuing with ON');
-              }
-              
-              // Then turn ON
+              // Not already On - just turn it ON (single API call, no intensity)
+              console.log('[ENV-CTRL] Turning humidifier ON');
               serviceResult = await callService('select', 'select_option', {
                 entity_id: ENTITIES.HUMIDIFIER_MODE,
                 option: 'On',
               });
               if (serviceResult?.success === true) {
                 cooldownRef.current[actionKey] = Date.now();
+                // Update global AC Infinity cooldown
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
+                }
               }
             }
             else if (action.action === 'turn_off') {
@@ -735,6 +828,10 @@ export class EnvironmentController {
                   skipped: true,
                   reason: 'Already Off',
                 });
+                // Update global AC Infinity cooldown even on skip
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
+                }
                 continue;
               }
               
@@ -745,6 +842,10 @@ export class EnvironmentController {
               });
               if (serviceResult?.success === true) {
                 cooldownRef.current[actionKey] = Date.now();
+                // Update global AC Infinity cooldown
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
+                }
               }
             }
             break;
@@ -801,6 +902,10 @@ export class EnvironmentController {
               // Update cooldown only on success
               if (serviceResult?.success === true) {
                 cooldownRef.current[actionKey] = Date.now();
+                // Update global AC Infinity cooldown
+                if (AC_INFINITY_DEVICES.includes(action.device)) {
+                  cooldownRef.current['_ac_infinity_global'] = Date.now();
+                }
               }
             }
             break;
@@ -814,6 +919,55 @@ export class EnvironmentController {
               // Update cooldown only on success
               if (serviceResult?.success === true) {
                 cooldownRef.current[actionKey] = Date.now();
+              }
+            }
+            break;
+            
+          case 'vicksHumidifier':
+            // Vicks humidifier is a Zigbee switch - no rate limits, can toggle freely
+            if (action.action === 'turn_on') {
+              const currentVicksState = getEntityState?.(ENTITIES.VICKS_HUMIDIFIER);
+              if (currentVicksState === 'on') {
+                console.log('[ENV-CTRL] Vicks humidifier already ON, skipping service call');
+                results.push({
+                  action,
+                  success: true,
+                  skipped: true,
+                  reason: 'Already On',
+                });
+                continue;
+              }
+              
+              console.log('[ENV-CTRL] Turning Vicks humidifier ON');
+              serviceResult = await callService('switch', 'turn_on', {
+                entity_id: ENTITIES.VICKS_HUMIDIFIER,
+              });
+              
+              if (serviceResult?.success === true) {
+                cooldownRef.current[actionKey] = Date.now();
+                console.log('[ENV-CTRL] ✓ Vicks humidifier turned ON');
+              }
+            } else if (action.action === 'turn_off') {
+              const currentVicksState = getEntityState?.(ENTITIES.VICKS_HUMIDIFIER);
+              if (currentVicksState === 'off') {
+                console.log('[ENV-CTRL] Vicks humidifier already OFF, skipping service call');
+                results.push({
+                  action,
+                  success: true,
+                  skipped: true,
+                  reason: 'Already Off',
+                });
+                continue;
+              }
+              
+              console.log('[ENV-CTRL] Turning Vicks humidifier OFF');
+              serviceResult = await callService('switch', 'turn_off', {
+                entity_id: ENTITIES.VICKS_HUMIDIFIER,
+              });
+              
+              if (serviceResult?.success === true) {
+                cooldownRef.current[actionKey] = Date.now();
+                console.log('[ENV-CTRL] ✓ Vicks humidifier turned OFF');
               }
             }
             break;
@@ -914,9 +1068,12 @@ export class EnvironmentController {
             console.warn('  Cooldown will be extended to prevent further errors.');
             
             // Extend cooldown for AC Infinity errors to prevent rapid retries
-            if (action.device === 'humidifier' || action.device === 'exhaustFan') {
+            // Store call time (not expiration time) for consistency
+            if (AC_INFINITY_DEVICES.includes(action.device)) {
               const extendedCooldown = (DEVICE_COOLDOWNS[action.device] || SERVICE_CALL_COOLDOWN) * 2;
-              cooldownRef.current[actionKey] = Date.now() + extendedCooldown;
+              cooldownRef.current[actionKey] = Date.now(); // Store call time
+              cooldownRef.current[`${actionKey}_duration`] = extendedCooldown; // Store duration separately
+              cooldownRef.current['_ac_infinity_global'] = Date.now(); // Update global cooldown
               console.warn(`[ENV-CTRL] Extended cooldown for ${action.device} to ${extendedCooldown / 1000}s`);
             }
           }
@@ -959,9 +1116,143 @@ export class EnvironmentController {
  * 
  * @param {Object} entities - Entity states from useHomeAssistant hook
  * @param {Object} stage - Current phenology stage
+ * @param {boolean} isDayTime - Whether it's day time (lights on)
  * @returns {EnvironmentController}
  */
-export function createControllerFromState(entities, stage) {
+/**
+ * Update AC Infinity VPD settings based on phenology stage
+ * 
+ * This function writes VPD target, high trigger, and low trigger values to AC Infinity devices
+ * when the phenology stage changes. Only updates if values have changed by at least 0.1 kPa
+ * (AC Infinity step size requirement).
+ * 
+ * @param {Object} stage - Current phenology stage with VPD targets
+ * @param {Function} callService - Home Assistant service call function
+ * @param {Function} getEntityState - Function to get current entity state
+ * @param {Object} cooldownRef - Ref object to track last update time
+ * @returns {Promise<Object>} Update results with success status and changes made
+ */
+export async function updateACInfinityVPDSettings(stage, callService, getEntityState, cooldownRef = { current: {} }) {
+  const VPD_SETTINGS_COOLDOWN = 60 * 60 * 1000; // 1 hour minimum between updates
+  const lastUpdate = cooldownRef.current['_vpd_settings_update'];
+  
+  // Check cooldown
+  if (lastUpdate && Date.now() - lastUpdate < VPD_SETTINGS_COOLDOWN) {
+    const remaining = Math.round((VPD_SETTINGS_COOLDOWN - (Date.now() - lastUpdate)) / 1000 / 60);
+    console.log(`[ENV-CTRL] VPD settings update skipped - cooldown active (${remaining} minutes remaining)`);
+    return {
+      success: false,
+      skipped: true,
+      reason: `Cooldown active (${remaining} minutes remaining)`,
+    };
+  }
+  
+  if (!stage || !stage.vpd) {
+    console.warn('[ENV-CTRL] No stage or VPD targets provided for VPD settings update');
+    return {
+      success: false,
+      error: 'No stage or VPD targets provided',
+    };
+  }
+  
+  const vpdTargets = stage.vpd;
+  const results = {
+    success: true,
+    changes: [],
+    skipped: [],
+  };
+  
+  // Calculate VPD trigger values based on stage targets
+  // High trigger should be slightly above max (when to activate)
+  // Low trigger should be slightly below optimal (when to deactivate)
+  const targetVPD = vpdTargets.optimal || ((vpdTargets.min + vpdTargets.max) / 2);
+  const highTrigger = vpdTargets.max + 0.1; // Slightly above max
+  const lowTrigger = Math.max(0.1, vpdTargets.min - 0.1); // Slightly below min, but not less than 0.1
+  
+  console.log(`[ENV-CTRL] Updating AC Infinity VPD settings for stage: ${stage.name}`);
+  console.log(`[ENV-CTRL] Target VPD: ${targetVPD.toFixed(2)} kPa, High Trigger: ${highTrigger.toFixed(2)} kPa, Low Trigger: ${lowTrigger.toFixed(2)} kPa`);
+  
+  // Update CloudForge T5 VPD settings
+  const cloudforgeUpdates = [
+    {
+      entity: ENTITIES.CLOUDFORGE_T5_TARGET_VPD,
+      value: targetVPD,
+      name: 'CloudForge Target VPD',
+    },
+    {
+      entity: ENTITIES.CLOUDFORGE_T5_VPD_HIGH_TRIGGER,
+      value: highTrigger,
+      name: 'CloudForge VPD High Trigger',
+    },
+    {
+      entity: ENTITIES.CLOUDFORGE_T5_VPD_LOW_TRIGGER,
+      value: lowTrigger,
+      name: 'CloudForge VPD Low Trigger',
+    },
+  ];
+  
+  for (const update of cloudforgeUpdates) {
+    try {
+      const currentValue = parseFloat(getEntityState?.(update.entity) || 0);
+      const change = Math.abs(currentValue - update.value);
+      
+      // Only update if change is >= 0.1 (AC Infinity step size requirement)
+      if (change < 0.1) {
+        console.log(`[ENV-CTRL] Skipping ${update.name}: current ${currentValue.toFixed(2)}, target ${update.value.toFixed(2)} (change ${change.toFixed(2)} < 0.1)`);
+        results.skipped.push({
+          entity: update.entity,
+          reason: `Change too small (${change.toFixed(2)} < 0.1)`,
+        });
+        continue;
+      }
+      
+      console.log(`[ENV-CTRL] Updating ${update.name}: ${currentValue.toFixed(2)} → ${update.value.toFixed(2)} kPa`);
+      const serviceResult = await callService('number', 'set_value', {
+        entity_id: update.entity,
+        value: update.value,
+      });
+      
+      if (serviceResult?.success === true) {
+        results.changes.push({
+          entity: update.entity,
+          name: update.name,
+          from: currentValue,
+          to: update.value,
+        });
+        console.log(`[ENV-CTRL] ✓ ${update.name} updated successfully`);
+      } else {
+        console.error(`[ENV-CTRL] Failed to update ${update.name}:`, serviceResult?.error || 'Unknown error');
+        results.success = false;
+        results.errors = results.errors || [];
+        results.errors.push({
+          entity: update.entity,
+          error: serviceResult?.error || 'Unknown error',
+        });
+      }
+      
+      // Small delay between updates to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      console.error(`[ENV-CTRL] Error updating ${update.name}:`, error);
+      results.success = false;
+      results.errors = results.errors || [];
+      results.errors.push({
+        entity: update.entity,
+        error: error.message,
+      });
+    }
+  }
+  
+  // Update cooldown on success
+  if (results.success && results.changes.length > 0) {
+    cooldownRef.current['_vpd_settings_update'] = Date.now();
+    console.log(`[ENV-CTRL] VPD settings update complete: ${results.changes.length} changes, ${results.skipped.length} skipped`);
+  }
+  
+  return results;
+}
+
+export function createControllerFromState(entities, stage, isDayTime = true) {
   if (!stage) {
     console.warn('[ENV-CTRL] No stage provided, using default targets');
   }
@@ -973,11 +1264,19 @@ export function createControllerFromState(entities, stage) {
     vpd: parseFloat(entities[ENTITIES.VPD]?.state || 0),
   };
   
-  // Extract target state from stage (with fallbacks)
+  // Determine day/night based on light state or explicit parameter
+  const lightState = entities[ENTITIES.LIGHT]?.state;
+  const isDay = isDayTime !== undefined ? isDayTime : (lightState === 'on');
+  
+  // Extract target state from stage (with day/night logic for temperature)
+  const tempTargets = isDay 
+    ? (stage?.temperature?.day || { min: 75, max: 82, target: 77 })
+    : (stage?.temperature?.night || { min: 68, max: 72, target: 70 });
+  
   const targetState = {
-    tempMin: stage?.temperature?.day?.min || 75,
-    tempMax: stage?.temperature?.day?.max || 82,
-    tempOptimal: stage?.temperature?.day?.target || 77,
+    tempMin: tempTargets.min,
+    tempMax: tempTargets.max,
+    tempOptimal: tempTargets.target,
     humidityMin: stage?.humidity?.min || 65,
     humidityMax: stage?.humidity?.max || 75,
     humidityOptimal: stage?.humidity?.optimal || 70,
@@ -988,7 +1287,7 @@ export function createControllerFromState(entities, stage) {
   
   // Log targets for debugging
   if (stage) {
-    console.log(`[ENV-CTRL] Stage targets (${stage.name || 'unknown'}):`, {
+    console.log(`[ENV-CTRL] Stage targets (${stage.name || 'unknown'}, ${isDay ? 'DAY' : 'NIGHT'}):`, {
       temp: `${targetState.tempMin}-${targetState.tempMax}°F (target: ${targetState.tempOptimal}°F)`,
       humidity: `${targetState.humidityMin}-${targetState.humidityMax}% (optimal: ${targetState.humidityOptimal}%)`,
       vpd: `${targetState.vpdMin}-${targetState.vpdMax} kPa (optimal: ${targetState.vpdOptimal} kPa)`,
@@ -1004,6 +1303,9 @@ export function createControllerFromState(entities, stage) {
     humidifier: {
       mode: entities[ENTITIES.HUMIDIFIER_MODE]?.state,
       currentPower: parseFloat(entities[ENTITIES.HUMIDIFIER_ON_POWER]?.state || 0),
+    },
+    vicksHumidifier: {
+      state: entities[ENTITIES.VICKS_HUMIDIFIER]?.state || 'off',
     },
     heater: {
       currentTemp: parseFloat(entities[ENTITIES.HEATER]?.attributes?.current_temperature || 0),

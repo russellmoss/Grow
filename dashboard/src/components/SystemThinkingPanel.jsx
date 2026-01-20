@@ -51,7 +51,7 @@ export function SystemThinkingPanel({ actionLog, isThinking, isEnabled }) {
         
         {!isEnabled && (
           <span className="px-3 py-1 bg-zinc-700 text-zinc-400 rounded-full text-sm font-medium">
-            Inactive
+            Heater Control Paused
           </span>
         )}
       </div>
@@ -164,9 +164,17 @@ export function SystemThinkingPanel({ actionLog, isThinking, isEnabled }) {
           </p>
         </div>
       ) : (
-        <p className="text-sm text-zinc-500">
-          No analysis history yet. Controller will run automatically every 5 minutes.
-        </p>
+        <div className="space-y-3">
+          <p className="text-sm text-zinc-500">
+            No analysis history yet. Controller will run automatically every 5 minutes.
+          </p>
+          <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700/50">
+            <p className="text-xs text-zinc-400">
+              <strong className="text-zinc-300">Control Architecture:</strong> Dashboard controls heater. 
+              AC Infinity app controls humidifier and exhaust fan. See Control Architecture panel for recommendations.
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

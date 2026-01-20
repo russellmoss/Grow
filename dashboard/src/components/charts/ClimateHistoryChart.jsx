@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   ComposedChart,
   Line,
@@ -8,9 +8,11 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  ReferenceArea,
+  ReferenceLine,
 } from 'recharts';
 import { format } from 'date-fns';
-import { Download } from 'lucide-react';
+import { Download, RotateCcw } from 'lucide-react';
 import { useHistoryData } from '../../hooks/useHistoryData';
 import { ChartTooltip } from './ChartTooltip';
 import { DateRangePicker } from './DateRangePicker';
@@ -33,6 +35,18 @@ export function ClimateHistoryChart() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef(null);
   
+  // Zoom state
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [originalRange, setOriginalRange] = useState(null);
+  const [originalStartDate, setOriginalStartDate] = useState(null);
+  const [originalEndDate, setOriginalEndDate] = useState(null);
+  
+  // Selection state for drag-to-zoom
+  const [selectionStart, setSelectionStart] = useState(null);
+  const [selectionEnd, setSelectionEnd] = useState(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const chartRef = useRef(null);
+  
   const { data, isLoading, error, lastUpdated } = useHistoryData(
     selectedRange,
     customStartDate,
@@ -53,11 +67,47 @@ export function ClimateHistoryChart() {
     return format(new Date(timestamp), 'MMM d');
   };
 
+  // Calculate dynamic Y-axis domain for temperature based on valid data
+  const tempDomain = useMemo(() => {
+    if (!data.length || !showTemp) return [60, 95]; // Default fallback
+    
+    // Filter out invalid temperatures (reasonable range: 0-150°F)
+    const validTemps = data
+      .map(d => d.temperature)
+      .filter(temp => temp != null && !isNaN(temp) && temp >= 0 && temp <= 150);
+    
+    if (validTemps.length === 0) return [60, 95]; // Fallback if no valid data
+    
+    const minTemp = Math.min(...validTemps);
+    const maxTemp = Math.max(...validTemps);
+    const range = maxTemp - minTemp;
+    
+    // Add 10% padding on each side, but ensure minimum range of 10°F
+    const padding = Math.max(range * 0.1, 5);
+    const domainMin = Math.max(0, Math.floor(minTemp - padding));
+    const domainMax = Math.min(150, Math.ceil(maxTemp + padding));
+    
+    // Ensure minimum range of 10°F for visibility
+    if (domainMax - domainMin < 10) {
+      const center = (domainMin + domainMax) / 2;
+      return [Math.max(0, Math.floor(center - 5)), Math.min(150, Math.ceil(center + 5))];
+    }
+    
+    return [domainMin, domainMax];
+  }, [data, showTemp]);
+
   const handleDateRangeChange = (start, end) => {
     setCustomStartDate(start);
     setCustomEndDate(end);
     setSelectedRange(null); // Clear preset range
     setShowDatePicker(false);
+    setIsZoomed(true);
+    // Save original state if not already saved
+    if (!isZoomed) {
+      setOriginalRange(selectedRange);
+      setOriginalStartDate(customStartDate);
+      setOriginalEndDate(customEndDate);
+    }
   };
 
   const handlePresetRange = (hours) => {
@@ -65,6 +115,110 @@ export function ClimateHistoryChart() {
     setCustomStartDate(null);
     setCustomEndDate(null);
     setShowDatePicker(false);
+    setIsZoomed(false);
+    setOriginalRange(null);
+    setOriginalStartDate(null);
+    setOriginalEndDate(null);
+  };
+  
+  const handleUndoZoom = () => {
+    if (originalRange !== null) {
+      setSelectedRange(originalRange);
+      setCustomStartDate(originalStartDate);
+      setCustomEndDate(originalEndDate);
+    } else {
+      setSelectedRange(24);
+      setCustomStartDate(null);
+      setCustomEndDate(null);
+    }
+    setIsZoomed(false);
+    setOriginalRange(null);
+    setOriginalStartDate(null);
+    setOriginalEndDate(null);
+  };
+  
+  // Handle mouse events for drag-to-zoom
+  const handleMouseDown = (e) => {
+    if (!e || !data.length) return;
+    
+    // Start selection immediately
+    setIsSelecting(true);
+    const activeLabel = e.activeLabel;
+    if (activeLabel !== undefined) {
+      setSelectionStart(activeLabel);
+      setSelectionEnd(activeLabel);
+    } else if (e.chartX !== undefined && data.length > 0) {
+      // Fallback: calculate from chart X position
+      const chartWidth = e.chartX;
+      const totalWidth = e.viewBox?.width || 800;
+      const dataIndex = Math.floor((chartWidth / totalWidth) * data.length);
+      if (dataIndex >= 0 && dataIndex < data.length) {
+        const timeValue = data[dataIndex].time;
+        setSelectionStart(timeValue);
+        setSelectionEnd(timeValue);
+      }
+    }
+  };
+  
+  const handleMouseMove = (e) => {
+    if (!isSelecting || !e || !data.length) return;
+    
+    const activeLabel = e.activeLabel;
+    if (activeLabel !== undefined && selectionStart !== null) {
+      setSelectionEnd(activeLabel);
+    } else if (e.chartX !== undefined && selectionStart !== null && data.length > 0) {
+      // Fallback: calculate from chart X position
+      const chartWidth = e.chartX;
+      const totalWidth = e.viewBox?.width || 800;
+      const dataIndex = Math.floor((chartWidth / totalWidth) * data.length);
+      if (dataIndex >= 0 && dataIndex < data.length) {
+        const timeValue = data[dataIndex].time;
+        setSelectionEnd(timeValue);
+      }
+    }
+  };
+  
+  const handleMouseUp = () => {
+    if (!isSelecting || selectionStart === null || selectionEnd === null) {
+      setIsSelecting(false);
+      setSelectionStart(null);
+      setSelectionEnd(null);
+      return;
+    }
+    
+    // Find the data points for the selected range
+    const startTime = Math.min(selectionStart, selectionEnd);
+    const endTime = Math.max(selectionStart, selectionEnd);
+    
+    // Ensure minimum selection size (at least 5 minutes)
+    if (endTime - startTime < 5 * 60 * 1000) {
+      setIsSelecting(false);
+      setSelectionStart(null);
+      setSelectionEnd(null);
+      return;
+    }
+    
+    const startPoint = data.find(d => d.time >= startTime);
+    const endPoint = [...data].reverse().find(d => d.time <= endTime);
+    
+    if (startPoint && endPoint && startPoint.time !== endPoint.time) {
+      // Save original state
+      setOriginalRange(selectedRange);
+      setOriginalStartDate(customStartDate);
+      setOriginalEndDate(customEndDate);
+      
+      // Zoom to selection
+      const startDate = new Date(startPoint.time);
+      const endDate = new Date(endPoint.time);
+      setCustomStartDate(startDate);
+      setCustomEndDate(endDate);
+      setSelectedRange(null);
+      setIsZoomed(true);
+    }
+    
+    setIsSelecting(false);
+    setSelectionStart(null);
+    setSelectionEnd(null);
   };
 
   const exportToCSV = () => {
@@ -131,9 +285,26 @@ export function ClimateHistoryChart() {
     <div className="card">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-bold text-gray-100">Climate History</h3>
+        <div>
+          <h3 className="text-lg font-bold text-gray-100">Climate History</h3>
+          {!isZoomed && (
+            <p className="text-xs text-zinc-500 mt-1">💡 Click and drag on chart to zoom</p>
+          )}
+        </div>
         
         <div className="flex gap-2 items-center">
+          {/* Undo Zoom button (only show when zoomed) */}
+          {isZoomed && (
+            <button
+              onClick={handleUndoZoom}
+              className="px-3 py-1.5 bg-caution/20 text-caution border border-caution/30 rounded-lg text-sm hover:bg-caution/30 transition-all flex items-center gap-1.5"
+              title="Undo Zoom"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Undo Zoom
+            </button>
+          )}
+          
           {/* Export button */}
           <button
             onClick={exportToCSV}
@@ -229,7 +400,15 @@ export function ClimateHistoryChart() {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+            <ComposedChart 
+              data={data} 
+              margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              style={{ cursor: isSelecting ? 'col-resize' : 'crosshair' }}
+            >
               <XAxis
                 dataKey="time"
                 tickFormatter={formatXAxis}
@@ -240,7 +419,7 @@ export function ClimateHistoryChart() {
               {/* Temperature Y-Axis (left) */}
               <YAxis
                 yAxisId="temp"
-                domain={[60, 95]}
+                domain={tempDomain}
                 stroke="#38bdf8"
                 tick={{ fill: '#9ca3af', fontSize: 11 }}
                 tickFormatter={(v) => `${v}°`}
@@ -260,6 +439,40 @@ export function ClimateHistoryChart() {
 
               <Tooltip content={<ChartTooltip />} />
               <Legend />
+              
+              {/* Selection visualization: vertical lines and highlight area */}
+              {isSelecting && selectionStart !== null && selectionEnd !== null && (
+                <>
+                  {/* Start vertical line */}
+                  <ReferenceLine
+                    x={selectionStart}
+                    yAxisId="temp"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.8}
+                    ifOverflow="extendDomain"
+                  />
+                  {/* End vertical line */}
+                  <ReferenceLine
+                    x={selectionEnd}
+                    yAxisId="temp"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.8}
+                    ifOverflow="extendDomain"
+                  />
+                  {/* Selection area highlight */}
+                  <ReferenceArea
+                    x1={Math.min(selectionStart, selectionEnd)}
+                    x2={Math.max(selectionStart, selectionEnd)}
+                    fill="#3b82f6"
+                    fillOpacity={0.15}
+                    stroke="none"
+                  />
+                </>
+              )}
 
               {/* Temperature line */}
               {showTemp && (
